@@ -14,8 +14,17 @@ export const Minimap: React.FC<MinimapProps> = ({ engine }) => {
   useEffect(() => {
     let animId: number;
     let sweepAngle = 0;
+    let lastRenderTime = 0;
 
-    const renderMinimap = () => {
+    const renderMinimap = (time: number) => {
+      animId = requestAnimationFrame(renderMinimap);
+
+      // Throttle minimap to 20 FPS (every 48ms) to keep game loop 100% butter smooth
+      if (time - lastRenderTime < 48) {
+        return;
+      }
+      lastRenderTime = time;
+
       const canvas = canvasRef.current;
       if (!canvas) return;
       const ctx = canvas.getContext('2d');

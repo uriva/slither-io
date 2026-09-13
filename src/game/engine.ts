@@ -227,6 +227,7 @@ export class GameEngine {
   }
 
   private initOrbs(): void {
+    this.foodGrid.clear();
     this.orbs = [];
     for (let i = 0; i < INITIAL_FOOD_COUNT; i++) {
       this.spawnOrb();
@@ -259,7 +260,7 @@ export class GameEngine {
     const colorConfig = FOOD_COLORS[colorIndex];
     const baseR = isDeathDrop ? Math.min(22, 7 + value * 1.1) : Math.min(12, 5 + value * 0.9);
 
-    this.orbs.push({
+    const orb: Orb = {
       id: this.nextOrbId++,
       x: ox,
       y: oy,
@@ -269,7 +270,9 @@ export class GameEngine {
       colorIndex,
       value: value,
       pulsePhase: Math.random() * Math.PI * 2,
-    });
+    };
+    orb.gridKey = this.foodGrid.insert(orb as Orb & GridItem);
+    this.orbs.push(orb);
   }
 
   private spawnPrey(): void {
@@ -278,7 +281,7 @@ export class GameEngine {
     const ox = Math.cos(theta) * r;
     const oy = Math.sin(theta) * r;
 
-    this.orbs.push({
+    const prey: Orb = {
       id: this.nextOrbId++,
       x: ox,
       y: oy,
@@ -289,9 +292,11 @@ export class GameEngine {
       value: 40,
       isPrey: true,
       preyAngle: Math.random() * Math.PI * 2,
-      preySpeed: 4.2,
+      preySpeed: 3.6,
       pulsePhase: Math.random() * Math.PI * 2,
-    });
+    };
+    prey.gridKey = this.foodGrid.insert(prey as Orb & GridItem);
+    this.orbs.push(prey);
   }
 
   private createSnake(
@@ -473,12 +478,7 @@ export class GameEngine {
       sound.setBoosting(wantsBoost);
     }
 
-    // Build Spatial Grids with zero string allocations
-    this.foodGrid.clear();
-    for (let i = 0; i < this.orbs.length; i++) {
-      this.foodGrid.insert(this.orbs[i] as Orb & GridItem);
-    }
-
+    // Build Body Spatial Grid (zero string allocations)
     this.bodyGrid.clear();
     for (const snake of this.snakes) {
       if (snake.isDead) continue;
@@ -673,6 +673,7 @@ export class GameEngine {
     const idx = this.orbs.findIndex((o) => o.id === orb.id);
     if (idx === -1) return;
 
+    this.foodGrid.remove(orb as Orb & GridItem, orb.gridKey);
     this.orbs.splice(idx, 1);
 
     const gain = orb.value;
@@ -795,6 +796,8 @@ export class GameEngine {
       orb.pulsePhase += 0.05;
 
       if (orb.isPrey) {
+        this.foodGrid.remove(orb as Orb & GridItem, orb.gridKey);
+
         orb.preyAngle = (orb.preyAngle || 0) + (Math.random() - 0.5) * 0.2;
         orb.x += Math.cos(orb.preyAngle) * (orb.preySpeed || 4.2);
         orb.y += Math.sin(orb.preyAngle) * (orb.preySpeed || 4.2);
@@ -815,6 +818,8 @@ export class GameEngine {
         if (currentDist > ARENA_RADIUS - 350) {
           orb.preyAngle = Math.atan2(-orb.y, -orb.x);
         }
+
+        orb.gridKey = this.foodGrid.insert(orb as Orb & GridItem);
       }
 
       // Hard clamp so no orb can ever be outside the red circle

@@ -57,6 +57,7 @@ export interface Orb {
   glowColor: string;
   colorIndex: number;
   value: number;
+  gridKey?: number;
   vx?: number;
   vy?: number;
   isPrey?: boolean; // Wandering fleeing firefly

@@ -18,7 +18,6 @@ export class SpatialGrid<T extends GridItem> {
   }
 
   public clear(): void {
-    // Return arrays to pool to avoid GC thrashing
     for (let i = 0; i < this.activeLists.length; i++) {
       const list = this.activeLists[i];
       list.length = 0;
@@ -30,11 +29,11 @@ export class SpatialGrid<T extends GridItem> {
     this.cells.clear();
   }
 
-  private getKey(cx: number, cy: number): number {
+  public getKey(cx: number, cy: number): number {
     return (((cx + 4000) & 0xffff) << 16) | ((cy + 4000) & 0xffff);
   }
 
-  public insert(item: T): void {
+  public insert(item: T): number {
     const cx = Math.floor(item.x / this.cellSize);
     const cy = Math.floor(item.y / this.cellSize);
     const key = this.getKey(cx, cy);
@@ -46,6 +45,18 @@ export class SpatialGrid<T extends GridItem> {
       this.activeLists.push(list);
     }
     list.push(item);
+    return key;
+  }
+
+  public remove(item: T, key?: number): void {
+    const cellKey = key !== undefined ? key : this.getKey(Math.floor(item.x / this.cellSize), Math.floor(item.y / this.cellSize));
+    const list = this.cells.get(cellKey);
+    if (list) {
+      const idx = list.indexOf(item);
+      if (idx !== -1) {
+        list.splice(idx, 1);
+      }
+    }
   }
 
   public query(x: number, y: number, range: number): T[] {
@@ -59,7 +70,6 @@ export class SpatialGrid<T extends GridItem> {
     const maxCx = Math.floor((x + range) / this.cellSize);
     const minCy = Math.floor((y - range) / this.cellSize);
     const maxCy = Math.floor((y + range) / this.cellSize);
-    const rSq = range * range;
 
     for (let cx = minCx; cx <= maxCx; cx++) {
       for (let cy = minCy; cy <= maxCy; cy++) {
