@@ -228,6 +228,7 @@ export class GameEngine {
       boostFuel: 0,
       turnSpeed: TURN_SPEED,
       trailTime: 0,
+      invulnerableTimer: isPlayer ? 180 : 90, // 3 seconds spawn protection
       aiTimer: Math.floor(Math.random() * 60),
     };
   }
@@ -240,10 +241,22 @@ export class GameEngine {
       const name = BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)] + (i > 25 ? `${i}` : '');
       const skin = SKINS[Math.floor(Math.random() * SKINS.length)];
 
-      const r = Math.sqrt(Math.random()) * (ARENA_RADIUS - 400);
-      const theta = Math.random() * Math.PI * 2;
-      const bx = Math.cos(theta) * r;
-      const by = Math.sin(theta) * r;
+      let bx = 0;
+      let by = 0;
+      let attempts = 0;
+
+      // Ensure bots spawn a safe distance away from player
+      do {
+        const r = 800 + Math.sqrt(Math.random()) * (ARENA_RADIUS - 1200);
+        const theta = Math.random() * Math.PI * 2;
+        bx = Math.cos(theta) * r;
+        by = Math.sin(theta) * r;
+        attempts++;
+      } while (
+        this.player &&
+        Math.hypot(bx - this.player.head.x, by - this.player.head.y) < 700 &&
+        attempts < 10
+      );
 
       // Varied bot lengths for dynamic arena (some small, some giant titans)
       const botLen = Math.floor(INITIAL_SNAKE_LENGTH + Math.random() * 60 + (Math.random() < 0.15 ? 120 : 0));
@@ -372,6 +385,10 @@ export class GameEngine {
   }
 
   private updateSnakePhysics(snake: Snake): void {
+    if (snake.invulnerableTimer > 0) {
+      snake.invulnerableTimer -= 1;
+    }
+
     // 1. Angle Interpolation (Smooth Steering)
     let diff = snake.targetAngle - snake.angle;
     while (diff < -Math.PI) diff += Math.PI * 2;
@@ -519,6 +536,7 @@ export class GameEngine {
   private checkCollisions(): void {
     for (const snake of this.snakes) {
       if (snake.isDead) continue;
+      if (snake.invulnerableTimer > 0) continue; // Spawn protection active
 
       const hx = snake.head.x;
       const hy = snake.head.y;
@@ -965,6 +983,25 @@ export class GameEngine {
     ctx.shadowColor = '#000000';
     ctx.shadowBlur = 4;
     ctx.fillText(`${snake.name} (${Math.floor(snake.score)})`, head.x, head.y - snake.radius * 1.5 - (isTopLeader ? 16 : 4));
+
+    // 6. Draw Spawn Protection Shield
+    if (snake.invulnerableTimer > 0) {
+      const shieldPulse = 0.5 + Math.sin(this.gameTime * 0.25) * 0.35;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(head.x, head.y, snake.radius * 1.6, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(0, 240, 255, ${shieldPulse})`;
+      ctx.lineWidth = 3;
+      ctx.shadowColor = '#00f0ff';
+      ctx.shadowBlur = 15;
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(head.x, head.y, snake.radius * 1.6, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(0, 240, 255, ${shieldPulse * 0.15})`;
+      ctx.fill();
+      ctx.restore();
+    }
 
     ctx.restore();
   }

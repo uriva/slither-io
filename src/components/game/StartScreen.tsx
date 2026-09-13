@@ -166,7 +166,7 @@ export const StartScreen: React.FC<StartScreenProps> = ({ onPlay, highScore }) =
   };
 
   return (
-    <div className="relative min-h-screen w-full flex items-center justify-center p-4 bg-[#06070c] overflow-hidden select-none">
+    <div className="absolute inset-0 z-20 w-full h-full flex items-center justify-center p-4 bg-[#06070c]/95 backdrop-blur-md overflow-hidden select-none">
       {/* Dynamic Background glow rings */}
       <div className="absolute w-[600px] h-[600px] rounded-full bg-cyan-500/10 blur-[120px] pointer-events-none -top-40 -left-40" />
       <div className="absolute w-[600px] h-[600px] rounded-full bg-purple-500/10 blur-[120px] pointer-events-none -bottom-40 -right-40" />

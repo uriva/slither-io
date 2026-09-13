@@ -41,6 +41,7 @@ export interface Snake {
   boostFuel: number; // Gradual mass consumption
   turnSpeed: number;
   trailTime: number;
+  invulnerableTimer: number; // Spawn shield countdown (in frames)
   aiTimer?: number;
   aiState?: 'wander' | 'eat' | 'attack' | 'flee';
   aiTarget?: Point | null;
