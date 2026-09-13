@@ -11,9 +11,10 @@ import { sound } from '@/game/audio';
 interface StartScreenProps {
   onPlay: (playerName: string, skinId: string) => void;
   highScore: number;
+  onlineCount?: number;
 }
 
-export const StartScreen: React.FC<StartScreenProps> = ({ onPlay, highScore }) => {
+export const StartScreen: React.FC<StartScreenProps> = ({ onPlay, highScore, onlineCount }) => {
   const [playerName, setPlayerName] = useState('QuantumViper');
   const [selectedSkinIndex, setSelectedSkinIndex] = useState(0);
   const [isMuted, setIsMuted] = useState(sound.getMuted());
@@ -184,8 +185,8 @@ export const StartScreen: React.FC<StartScreenProps> = ({ onPlay, highScore }) =
         {/* Logo and Brand */}
         <div className="flex flex-col items-center text-center gap-2">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-xs font-mono tracking-widest uppercase">
-            <Sparkles className="w-3.5 h-3.5 animate-spin" />
-            Next.js &bull; Deno Deploy Engine
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span>Shared Live Arena &bull; {onlineCount || 1} Online</span>
           </div>
 
           <h1 className="text-5xl md:text-6xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-br from-cyan-300 via-teal-200 to-indigo-400 drop-shadow-[0_0_35px_rgba(0,240,255,0.4)] uppercase">

@@ -24,6 +24,7 @@ export interface Snake {
   id: string;
   name: string;
   isPlayer: boolean;
+  isRemoteHuman?: boolean;
   skin: SnakeSkin;
   head: Point;
   angle: number;
@@ -102,4 +103,20 @@ export interface GameStats {
   foodEaten: number;
   maxRank: number;
   killerName?: string;
+}
+
+export interface PlayerPresence {
+  id: string;
+  name: string;
+  skinId: string;
+  head: Point;
+  angle: number;
+  speed: number;
+  radius: number;
+  score: number;
+  kills: number;
+  isBoosting: boolean;
+  isDead: boolean;
+  body: { x: number; y: number; radius: number }[];
+  updatedAt: number;
 }

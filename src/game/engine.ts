@@ -7,6 +7,7 @@ import {
   GameStats,
   Point,
   SnakeSkin,
+  PlayerPresence,
 } from './types';
 import {
   ARENA_RADIUS,
@@ -17,6 +18,7 @@ import {
   BOOST_SPEED,
   TURN_SPEED,
   BOOST_TURN_SPEED,
+  MIN_BOOST_MASS,
   INITIAL_FOOD_COUNT,
   PREY_COUNT,
   BOT_COUNT,
@@ -390,6 +392,65 @@ export class GameEngine {
     sound.setBoosting(false);
   }
 
+  public syncRemotePeers(peers: Record<string, PlayerPresence>): void {
+    const peerIds = new Set(Object.keys(peers));
+    const now = Date.now();
+
+    // 1. Remove disconnected remote human snakes
+    for (let i = this.snakes.length - 1; i >= 0; i--) {
+      const s = this.snakes[i];
+      if (s.isRemoteHuman) {
+        if (!peerIds.has(s.id) || (peers[s.id] && now - (peers[s.id].updatedAt || 0) > 8000)) {
+          this.snakes.splice(i, 1);
+        }
+      }
+    }
+
+    // 2. Add or update active peer snakes
+    for (const [peerId, peer] of Object.entries(peers)) {
+      if (!peer || !peer.head || peer.isDead) continue;
+      if (this.player && (peer.id === this.player.id || peerId === this.player.id)) continue;
+
+      let remoteSnake = this.snakes.find((s) => s.id === peerId);
+      if (!remoteSnake) {
+        const skin = SKINS.find((sk) => sk.id === peer.skinId) || SKINS[0];
+        remoteSnake = this.createSnake(
+          peerId,
+          peer.name || 'HumanSerpent',
+          false,
+          skin,
+          peer.head.x,
+          peer.head.y,
+          peer.body?.length || INITIAL_SNAKE_LENGTH
+        );
+        remoteSnake.isRemoteHuman = true;
+        this.snakes.push(remoteSnake);
+      }
+
+      remoteSnake.name = peer.name || remoteSnake.name;
+      remoteSnake.score = peer.score || remoteSnake.score;
+      remoteSnake.kills = peer.kills || remoteSnake.kills;
+      remoteSnake.isBoosting = !!peer.isBoosting;
+      remoteSnake.isDead = !!peer.isDead;
+      remoteSnake.speed = peer.speed || remoteSnake.speed;
+      remoteSnake.radius = peer.radius || remoteSnake.radius;
+      remoteSnake.targetAngle = peer.angle;
+
+      // Smooth interpolation toward peer head position
+      remoteSnake.head.x += (peer.head.x - remoteSnake.head.x) * 0.35;
+      remoteSnake.head.y += (peer.head.y - remoteSnake.head.y) * 0.35;
+      remoteSnake.angle = peer.angle;
+
+      if (peer.body && peer.body.length > 0) {
+        remoteSnake.body = peer.body.map((seg) => ({
+          x: seg.x,
+          y: seg.y,
+          radius: seg.radius || remoteSnake.radius,
+        }));
+      }
+    }
+  }
+
   public update(dt: number): void {
     this.gameTime++;
 
@@ -406,7 +467,8 @@ export class GameEngine {
         this.player.targetAngle = Math.atan2(dy, dx);
       }
 
-      const wantsBoost = (this.isMouseDown || this.isSpaceDown) && this.player.body.length > 14;
+      const canBoost = this.player.score > MIN_BOOST_MASS;
+      const wantsBoost = (this.isMouseDown || this.isSpaceDown) && canBoost;
       this.player.isBoosting = wantsBoost;
       sound.setBoosting(wantsBoost);
     }
@@ -420,15 +482,14 @@ export class GameEngine {
     this.bodyGrid.clear();
     for (const snake of this.snakes) {
       if (snake.isDead) continue;
-      // Stride segments to reduce collision grid size by 75% without losing collision accuracy
-      const stride = Math.max(2, Math.floor(snake.radius * 0.45));
-      for (let i = 2; i < snake.body.length; i += stride) {
+      // Insert every segment (no stride gaps) for 100% airtight collision
+      for (let i = 2; i < snake.body.length; i++) {
         const seg = snake.body[i];
         this.bodyGrid.insert({
           id: i,
           x: seg.x,
           y: seg.y,
-          radius: seg.radius * 1.15,
+          radius: seg.radius,
           snakeId: snake.id,
           segmentIndex: i,
         });
@@ -508,31 +569,33 @@ export class GameEngine {
     snake.speed += (targetSpeed - snake.speed) * 0.2;
 
     // Boosting consumes mass and drops glowing food orbs behind
-    if (snake.isBoosting && snake.body.length > 14) {
-      snake.boostFuel += 1;
-      if (snake.boostFuel >= 7) {
-        snake.boostFuel = 0;
-        snake.score = Math.max(10, snake.score - 2);
+    if (snake.isBoosting) {
+      if (snake.score <= MIN_BOOST_MASS) {
+        snake.isBoosting = false;
+      } else {
+        snake.boostFuel += 1;
+        if (snake.boostFuel >= 4) {
+          snake.boostFuel = 0;
+          snake.score = Math.max(MIN_BOOST_MASS, snake.score - 1.2);
 
-        // Spawn dropped mass orb from tail
-        const tail = snake.body[snake.body.length - 1];
-        if (tail) {
-          this.spawnOrb(tail.x, tail.y, 2, false);
-          this.particles.push({
-            x: tail.x + (Math.random() - 0.5) * 10,
-            y: tail.y + (Math.random() - 0.5) * 10,
-            vx: -Math.cos(snake.angle) * 3 + (Math.random() - 0.5) * 2,
-            vy: -Math.sin(snake.angle) * 3 + (Math.random() - 0.5) * 2,
-            color: snake.skin.particleColor,
-            size: Math.random() * 4 + 3,
-            alpha: 1,
-            life: 0,
-            maxLife: 16,
-          });
+          // Spawn dropped mass orb from tail
+          const tail = snake.body[snake.body.length - 1];
+          if (tail) {
+            this.spawnOrb(tail.x, tail.y, 2, false);
+            this.particles.push({
+              x: tail.x + (Math.random() - 0.5) * 10,
+              y: tail.y + (Math.random() - 0.5) * 10,
+              vx: -Math.cos(snake.angle) * 3 + (Math.random() - 0.5) * 2,
+              vy: -Math.sin(snake.angle) * 3 + (Math.random() - 0.5) * 2,
+              color: snake.skin.particleColor,
+              size: Math.random() * 4 + 3,
+              alpha: 1,
+              life: 0,
+              maxLife: 16,
+            });
+          }
         }
       }
-    } else {
-      snake.isBoosting = false;
     }
 
     // 3. Move Head Forward
@@ -655,15 +718,18 @@ export class GameEngine {
 
       // 2. Head-to-Body Collision with other snakes
       this.bodyQueryList.length = 0;
-      this.bodyGrid.queryInto(hx, hy, snake.radius * 1.5, this.bodyQueryList);
+      this.bodyGrid.queryInto(hx, hy, snake.radius * 2.0, this.bodyQueryList);
 
       for (let i = 0; i < this.bodyQueryList.length; i++) {
         const seg = this.bodyQueryList[i];
         if (seg.snakeId === snake.id) continue; // Cannot hit own body!
 
         const dist = Math.hypot(hx - seg.x, hy - seg.y);
-        if (dist < snake.radius * 0.85 + seg.radius * 0.7) {
+        if (dist < snake.radius * 0.92 + seg.radius * 0.88) {
           const killer = this.snakes.find((s) => s.id === seg.snakeId);
+          // Don't collide with shielded spawning snakes
+          if (killer && killer.invulnerableTimer > 0) continue;
+
           this.killSnake(snake, killer ? killer.name : 'Unknown');
           if (killer && !killer.isDead) {
             killer.kills += 1;
@@ -1140,12 +1206,16 @@ export class GameEngine {
     // 7. Draw Name Tag and Score
     ctx.font = `600 ${Math.max(12, snake.radius * 0.8)}px sans-serif`;
     ctx.textAlign = 'center';
-    ctx.fillStyle = snake.isPlayer ? '#00f0ff' : 'rgba(255, 255, 255, 0.85)';
-    ctx.fillText(
-      `${snake.name} (${Math.floor(snake.score)})`,
-      head.x,
-      head.y - snake.radius * 1.5 - (isTopLeader ? 16 : 4)
-    );
+    if (snake.isPlayer) {
+      ctx.fillStyle = '#00f0ff';
+      ctx.fillText(`${snake.name} (${Math.floor(snake.score)})`, head.x, head.y - snake.radius * 1.5 - (isTopLeader ? 16 : 4));
+    } else if (snake.isRemoteHuman) {
+      ctx.fillStyle = '#ff00aa';
+      ctx.fillText(`⚡ ${snake.name} (${Math.floor(snake.score)})`, head.x, head.y - snake.radius * 1.5 - (isTopLeader ? 16 : 4));
+    } else {
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+      ctx.fillText(`${snake.name} (${Math.floor(snake.score)})`, head.x, head.y - snake.radius * 1.5 - (isTopLeader ? 16 : 4));
+    }
 
     // 8. Draw Spawn Protection Shield
     if (snake.invulnerableTimer > 0) {

@@ -4,11 +4,13 @@ import React, { useState } from 'react';
 import { GameEngine } from '@/game/engine';
 import { Minimap } from './Minimap';
 import { sound } from '@/game/audio';
-import { Volume2, VolumeX, Trophy, Zap, Skull, Shield, Compass, ZoomIn, ZoomOut, Mouse } from 'lucide-react';
+import { MIN_BOOST_MASS } from '@/game/constants';
+import { Volume2, VolumeX, Trophy, Zap, Skull, Shield, Compass, ZoomIn, ZoomOut, Mouse, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 interface GameHUDProps {
   engine: GameEngine;
+  onlineCount: number;
   onBoostStart: () => void;
   onBoostEnd: () => void;
   onZoomIn: () => void;
@@ -18,6 +20,7 @@ interface GameHUDProps {
 
 export const GameHUD: React.FC<GameHUDProps> = ({
   engine,
+  onlineCount,
   onBoostStart,
   onBoostEnd,
   onZoomIn,
@@ -38,6 +41,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   const playerRank = engine.leaderboard.findIndex((e) => e.isPlayer) + 1;
   const totalSnakes = engine.snakes.filter((s) => !s.isDead).length;
   const currentZoomPercent = Math.round(engine.camera.userZoom * 100);
+  const canBoost = player.score > MIN_BOOST_MASS;
 
   return (
     <div className="absolute inset-0 pointer-events-none select-none z-10 flex flex-col justify-between p-4 md:p-6 font-sans">
@@ -76,10 +80,24 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 <Skull className="w-3 h-3" />
                 Kills: <strong className="text-white font-bold">{player.kills}</strong>
               </span>
-              <span className="text-emerald-400 flex items-center gap-1">
-                <Zap className="w-3 h-3" />
-                Speed: <strong className="text-white">{player.isBoosting ? '2.0x' : '1.0x'}</strong>
-              </span>
+
+              {canBoost ? (
+                <span className={player.isBoosting ? 'text-cyan-400 flex items-center gap-1 font-bold animate-pulse' : 'text-emerald-400 flex items-center gap-1'}>
+                  <Zap className="w-3 h-3" />
+                  {player.isBoosting ? 'Boosting 2x' : 'Boost Ready'}
+                </span>
+              ) : (
+                <span className="text-amber-400 flex items-center gap-1 text-[10px]">
+                  Need {MIN_BOOST_MASS}+ Mass
+                </span>
+              )}
+            </div>
+
+            {/* Live Multiplayer Room Indicator */}
+            <div className="flex items-center gap-1.5 pt-1 border-t border-white/5 text-[10px] font-mono text-emerald-400 font-semibold">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping inline-block" />
+              <Users className="w-3 h-3 text-emerald-400 ml-0.5" />
+              <span>{onlineCount} {onlineCount === 1 ? 'Player' : 'Players'} in Shared Arena</span>
             </div>
           </div>
         </div>
@@ -102,7 +120,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             <div className="flex items-center justify-between pb-2 mb-2 border-b border-white/10">
               <span className="text-xs font-mono uppercase tracking-widest text-yellow-400 font-bold flex items-center gap-1.5">
                 <Trophy className="w-3.5 h-3.5" />
-                Leaderboard
+                Live Arena Board
               </span>
               <span className="text-[10px] font-mono text-slate-400">Top 10</span>
             </div>
@@ -181,7 +199,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             </span>
             <span>•</span>
             <span className="flex items-center gap-1 text-slate-300">
-              <Zap className="w-3 h-3 text-yellow-400" /> Boost
+              <Zap className="w-3 h-3 text-yellow-400" /> Boost (Costs Mass)
             </span>
             <span>•</span>
             <span className="flex items-center gap-1 text-slate-300">
@@ -198,10 +216,15 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               onTouchEnd={onBoostEnd}
               onMouseDown={onBoostStart}
               onMouseUp={onBoostEnd}
-              className="w-20 h-20 rounded-full bg-gradient-to-tr from-cyan-600 to-blue-500 active:from-cyan-400 active:to-blue-400 text-white font-mono font-bold text-xs flex flex-col items-center justify-center gap-1 shadow-2xl border-2 border-white/30 active:scale-95 transition-transform select-none"
+              disabled={!canBoost}
+              className={`w-20 h-20 rounded-full font-mono font-bold text-xs flex flex-col items-center justify-center gap-1 shadow-2xl border-2 transition-all select-none ${
+                canBoost
+                  ? 'bg-gradient-to-tr from-cyan-600 to-blue-500 active:from-cyan-400 active:to-blue-400 text-white border-white/30 active:scale-95'
+                  : 'bg-slate-800 text-slate-500 border-slate-700 opacity-60 cursor-not-allowed'
+              }`}
             >
-              <Zap className="w-6 h-6 text-yellow-300 fill-yellow-300" />
-              <span>BOOST</span>
+              <Zap className={`w-6 h-6 ${canBoost ? 'text-yellow-300 fill-yellow-300' : 'text-slate-500'}`} />
+              <span>{canBoost ? 'BOOST' : 'LOW MASS'}</span>
             </button>
           </div>
         )}

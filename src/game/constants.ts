@@ -9,6 +9,7 @@ export const BOOST_SPEED = 8.5;
 export const TURN_SPEED = 0.085;
 export const BOOST_TURN_SPEED = 0.11;
 export const SEGMENT_SPACING = 8;
+export const MIN_BOOST_MASS = 32;
 export const INITIAL_FOOD_COUNT = 3000;
 export const MAX_FOOD_COUNT = 4500;
 export const PREY_COUNT = 25;

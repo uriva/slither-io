@@ -2,10 +2,11 @@
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { GameEngine } from '@/game/engine';
-import { GameStats } from '@/game/types';
+import { GameStats, PlayerPresence } from '@/game/types';
 import { StartScreen } from './StartScreen';
 import { GameHUD } from './GameHUD';
 import { GameOverModal } from './GameOverModal';
+import { db, arenaRoom } from '@/lib/instant';
 
 export const SlitherGame: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -21,6 +22,57 @@ export const SlitherGame: React.FC = () => {
 
   // Periodic state refresh for HUD
   const [, setTick] = useState(0);
+
+  // InstantDB shared multiplayer room presence
+  const { publishPresence, peers } = db.rooms.usePresence(arenaRoom);
+  const onlineCount = Object.keys(peers || {}).length + (gameState === 'playing' ? 1 : 0);
+
+  // Sync peers into GameEngine
+  useEffect(() => {
+    if (engineRef.current && peers) {
+      engineRef.current.syncRemotePeers(peers as unknown as Record<string, PlayerPresence>);
+    }
+  }, [peers]);
+
+  // Publish player presence to InstantDB room periodically (~18Hz)
+  useEffect(() => {
+    if (gameState !== 'playing') return;
+
+    const interval = setInterval(() => {
+      const engine = engineRef.current;
+      const player = engine?.player;
+      if (!engine || !player || player.isDead) return;
+
+      // Sample key body points to keep network packet lightweight
+      const sampleStep = Math.max(1, Math.floor(player.body.length / 22));
+      const bodySamples: { x: number; y: number; radius: number }[] = [];
+      for (let i = 0; i < player.body.length; i += sampleStep) {
+        bodySamples.push({
+          x: Math.round(player.body[i].x),
+          y: Math.round(player.body[i].y),
+          radius: Math.round(player.body[i].radius),
+        });
+      }
+
+      publishPresence({
+        id: player.id,
+        name: player.name,
+        skinId: player.skin.id,
+        head: { x: Math.round(player.head.x), y: Math.round(player.head.y) },
+        angle: Number(player.angle.toFixed(3)),
+        speed: Number(player.speed.toFixed(1)),
+        radius: Math.round(player.radius),
+        score: Math.round(player.score),
+        kills: player.kills,
+        isBoosting: player.isBoosting,
+        isDead: player.isDead,
+        body: bodySamples,
+        updatedAt: Date.now(),
+      });
+    }, 55);
+
+    return () => clearInterval(interval);
+  }, [gameState, publishPresence]);
 
   // Load High Score
   useEffect(() => {
@@ -157,7 +209,7 @@ export const SlitherGame: React.FC = () => {
     }
   }, []);
 
-  // Touch handlers for mobile (drag to steer + pinch to zoom)
+  // Touch handlers for mobile
   const handleTouchStart = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
     if (e.touches.length === 2) {
       const dx = e.touches[0].clientX - e.touches[1].clientX;
@@ -170,7 +222,6 @@ export const SlitherGame: React.FC = () => {
     const engine = engineRef.current;
     if (!engine || e.touches.length === 0) return;
 
-    // Pinch-to-zoom
     if (e.touches.length === 2 && lastPinchDistRef.current !== null) {
       const dx = e.touches[0].clientX - e.touches[1].clientX;
       const dy = e.touches[0].clientY - e.touches[1].clientY;
@@ -261,13 +312,14 @@ export const SlitherGame: React.FC = () => {
 
       {/* Start Screen */}
       {gameState === 'menu' && (
-        <StartScreen onPlay={startGame} highScore={highScore} />
+        <StartScreen onPlay={startGame} highScore={highScore} onlineCount={onlineCount} />
       )}
 
       {/* Active Game HUD */}
       {gameState === 'playing' && engineRef.current && (
         <GameHUD
           engine={engineRef.current}
+          onlineCount={onlineCount}
           onBoostStart={() => {
             if (engineRef.current) engineRef.current.isMouseDown = true;
           }}
