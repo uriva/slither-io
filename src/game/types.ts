@@ -54,6 +54,7 @@ export interface Orb {
   radius: number;
   color: string;
   glowColor: string;
+  colorIndex: number;
   value: number;
   vx?: number;
   vy?: number;

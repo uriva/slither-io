@@ -1,18 +1,18 @@
 import { SnakeSkin } from './types';
 
-export const ARENA_RADIUS = 3200;
+export const ARENA_RADIUS = 5500;
 export const INITIAL_SNAKE_LENGTH = 16;
 export const BASE_RADIUS = 13;
-export const MAX_RADIUS = 38;
+export const MAX_RADIUS = 42;
 export const BASE_SPEED = 4.2;
 export const BOOST_SPEED = 8.5;
 export const TURN_SPEED = 0.085;
 export const BOOST_TURN_SPEED = 0.11;
 export const SEGMENT_SPACING = 8;
-export const INITIAL_FOOD_COUNT = 1600;
-export const MAX_FOOD_COUNT = 2400;
-export const PREY_COUNT = 15;
-export const BOT_COUNT = 32;
+export const INITIAL_FOOD_COUNT = 3000;
+export const MAX_FOOD_COUNT = 4500;
+export const PREY_COUNT = 25;
+export const BOT_COUNT = 40;
 
 export const SKINS: SnakeSkin[] = [
   {
@@ -105,7 +105,9 @@ export const BOT_NAMES = [
   'Nightshade', 'Chronos', 'ThunderTail', 'VenomByte',
   'Spectralis', 'HydraNine', 'Vortex', 'Krypton',
   'BlazeRunner', 'EchoReaper', 'Zenith', 'Phantom',
-  'CosmoDrifter', 'NovaBurst', 'Striker', 'Leviathan'
+  'CosmoDrifter', 'NovaBurst', 'Striker', 'Leviathan',
+  'NebulaBeast', 'DarkMatter', 'Pulsar', 'Eclipse',
+  'VoidReaper', 'IonCannon', 'GalacticWorm', 'Supernova'
 ];
 
 export const FOOD_COLORS = [

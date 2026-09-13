@@ -2,10 +2,18 @@ class SoundSystem {
   private ctx: AudioContext | null = null;
   private isMuted: boolean = false;
   private volume: number = 0.5;
-  private boostOsc: OscillatorNode | null = null;
+
+  // Boost whoosh nodes (aerodynamic filtered rush + warm sub swell)
+  private boostNoiseSource: AudioBufferSourceNode | null = null;
+  private boostFilter: BiquadFilterNode | null = null;
   private boostGain: GainNode | null = null;
+  private boostSubOsc: OscillatorNode | null = null;
+  private boostSubGain: GainNode | null = null;
+
+  // Ambient deep drone
   private ambientOsc: OscillatorNode | null = null;
   private ambientGain: GainNode | null = null;
+
   private lastEatNoteIndex: number = 0;
   private lastEatTime: number = 0;
 
@@ -36,12 +44,12 @@ class SoundSystem {
 
       const filter = this.ctx.createBiquadFilter();
       filter.type = 'lowpass';
-      filter.frequency.setValueAtTime(140, this.ctx.currentTime);
+      filter.frequency.setValueAtTime(110, this.ctx.currentTime);
 
-      this.ambientOsc.type = 'sawtooth';
-      this.ambientOsc.frequency.setValueAtTime(55, this.ctx.currentTime); // Low A1 drone
+      this.ambientOsc.type = 'sine';
+      this.ambientOsc.frequency.setValueAtTime(55, this.ctx.currentTime); // Gentle A1 sub drone
 
-      this.ambientGain.gain.setValueAtTime(this.isMuted ? 0 : this.volume * 0.03, this.ctx.currentTime);
+      this.ambientGain.gain.setValueAtTime(this.isMuted ? 0 : this.volume * 0.04, this.ctx.currentTime);
 
       this.ambientOsc.connect(filter);
       filter.connect(this.ambientGain);
@@ -56,12 +64,13 @@ class SoundSystem {
   public setMuted(muted: boolean): void {
     this.isMuted = muted;
     if (this.ambientGain && this.ctx) {
-      this.ambientGain.gain.setValueAtTime(muted ? 0 : this.volume * 0.03, this.ctx.currentTime);
+      this.ambientGain.gain.setValueAtTime(muted ? 0 : this.volume * 0.04, this.ctx.currentTime);
     }
     if (this.boostGain && this.ctx) {
-      if (muted) {
-        this.boostGain.gain.setValueAtTime(0, this.ctx.currentTime);
-      }
+      this.boostGain.gain.setValueAtTime(0, this.ctx.currentTime);
+    }
+    if (this.boostSubGain && this.ctx) {
+      this.boostSubGain.gain.setValueAtTime(0, this.ctx.currentTime);
     }
   }
 
@@ -72,7 +81,7 @@ class SoundSystem {
   public setVolume(vol: number): void {
     this.volume = Math.max(0, Math.min(1, vol));
     if (this.ambientGain && this.ctx && !this.isMuted) {
-      this.ambientGain.gain.setValueAtTime(this.volume * 0.03, this.ctx.currentTime);
+      this.ambientGain.gain.setValueAtTime(this.volume * 0.04, this.ctx.currentTime);
     }
   }
 
@@ -93,65 +102,109 @@ class SoundSystem {
 
       osc.type = 'sine';
       osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(freq * 1.5, this.ctx.currentTime + 0.08);
+      osc.frequency.exponentialRampToValueAtTime(freq * 1.4, this.ctx.currentTime + 0.07);
 
-      const peakGain = Math.min(0.2, 0.06 + value * 0.015) * this.volume;
+      const peakGain = Math.min(0.22, 0.07 + value * 0.015) * this.volume;
       gain.gain.setValueAtTime(peakGain, this.ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.1);
+      gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.09);
 
       osc.connect(gain);
       gain.connect(this.ctx.destination);
 
       osc.start();
-      osc.stop(this.ctx.currentTime + 0.1);
+      osc.stop(this.ctx.currentTime + 0.09);
     } catch {
       // Audio context may be closed or locked
     }
   }
 
+  // Sleek Aerodynamic Sci-Fi Slipstream & Warm Sub Boost
   public setBoosting(boosting: boolean): void {
     if (this.isMuted || !this.ctx) {
       if (this.boostGain && this.ctx) {
         this.boostGain.gain.setValueAtTime(0, this.ctx.currentTime);
       }
+      if (this.boostSubGain && this.ctx) {
+        this.boostSubGain.gain.setValueAtTime(0, this.ctx.currentTime);
+      }
       return;
     }
 
     try {
-      if (!this.boostOsc) {
-        this.boostOsc = this.ctx.createOscillator();
+      if (!this.boostNoiseSource) {
+        // Create 2-second looping soft pink/brown noise buffer for natural aerodynamic rush
+        const bufferSize = this.ctx.sampleRate * 2;
+        const noiseBuffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+        const data = noiseBuffer.getChannelData(0);
+        let lastOut = 0.0;
+        for (let i = 0; i < bufferSize; i++) {
+          const white = Math.random() * 2 - 1;
+          // Pink noise 1-pole filter
+          lastOut = (lastOut * 0.94) + (white * 0.06);
+          data[i] = lastOut * 3.5;
+        }
+
+        this.boostNoiseSource = this.ctx.createBufferSource();
+        this.boostNoiseSource.buffer = noiseBuffer;
+        this.boostNoiseSource.loop = true;
+
+        this.boostFilter = this.ctx.createBiquadFilter();
+        this.boostFilter.type = 'lowpass';
+        this.boostFilter.frequency.setValueAtTime(260, this.ctx.currentTime);
+        this.boostFilter.Q.setValueAtTime(1.5, this.ctx.currentTime);
+
         this.boostGain = this.ctx.createGain();
-
-        const filter = this.ctx.createBiquadFilter();
-        filter.type = 'bandpass';
-        filter.frequency.setValueAtTime(220, this.ctx.currentTime);
-        filter.Q.setValueAtTime(3, this.ctx.currentTime);
-
-        this.boostOsc.type = 'sawtooth';
-        this.boostOsc.frequency.setValueAtTime(110, this.ctx.currentTime);
-
         this.boostGain.gain.setValueAtTime(0, this.ctx.currentTime);
 
-        this.boostOsc.connect(filter);
-        filter.connect(this.boostGain);
+        this.boostNoiseSource.connect(this.boostFilter);
+        this.boostFilter.connect(this.boostGain);
         this.boostGain.connect(this.ctx.destination);
+        this.boostNoiseSource.start();
 
-        this.boostOsc.start();
+        // Warm sub-bass harmonic glide (gentle sine wave)
+        this.boostSubOsc = this.ctx.createOscillator();
+        this.boostSubGain = this.ctx.createGain();
+        this.boostSubOsc.type = 'sine';
+        this.boostSubOsc.frequency.setValueAtTime(65, this.ctx.currentTime);
+        this.boostSubGain.gain.setValueAtTime(0, this.ctx.currentTime);
+
+        this.boostSubOsc.connect(this.boostSubGain);
+        this.boostSubGain.connect(this.ctx.destination);
+        this.boostSubOsc.start();
       }
 
-      if (this.boostGain && this.boostOsc) {
-        const targetGain = boosting && !this.isMuted ? this.volume * 0.12 : 0.0001;
-        this.boostGain.gain.cancelScheduledValues(this.ctx.currentTime);
-        this.boostGain.gain.setTargetAtTime(targetGain, this.ctx.currentTime, 0.08);
+      const now = this.ctx.currentTime;
+      if (this.boostGain && this.boostFilter && this.boostSubGain && this.boostSubOsc) {
+        if (boosting && !this.isMuted) {
+          // Smooth aerodynamic whoosh sweep
+          this.boostGain.gain.cancelScheduledValues(now);
+          this.boostGain.gain.setTargetAtTime(this.volume * 0.18, now, 0.08);
 
-        if (boosting) {
-          this.boostOsc.frequency.setTargetAtTime(160, this.ctx.currentTime, 0.15);
+          this.boostFilter.frequency.cancelScheduledValues(now);
+          this.boostFilter.frequency.setTargetAtTime(680, now, 0.12);
+
+          this.boostSubGain.gain.cancelScheduledValues(now);
+          this.boostSubGain.gain.setTargetAtTime(this.volume * 0.14, now, 0.08);
+
+          this.boostSubOsc.frequency.cancelScheduledValues(now);
+          this.boostSubOsc.frequency.setTargetAtTime(85, now, 0.15);
         } else {
-          this.boostOsc.frequency.setTargetAtTime(100, this.ctx.currentTime, 0.1);
+          // Fade out smoothly without abrupt click
+          this.boostGain.gain.cancelScheduledValues(now);
+          this.boostGain.gain.setTargetAtTime(0.0001, now, 0.07);
+
+          this.boostFilter.frequency.cancelScheduledValues(now);
+          this.boostFilter.frequency.setTargetAtTime(260, now, 0.1);
+
+          this.boostSubGain.gain.cancelScheduledValues(now);
+          this.boostSubGain.gain.setTargetAtTime(0.0001, now, 0.07);
+
+          this.boostSubOsc.frequency.cancelScheduledValues(now);
+          this.boostSubOsc.frequency.setTargetAtTime(60, now, 0.1);
         }
       }
     } catch {
-      // Ignore audio resume errors
+      // Ignore audio unlock errors
     }
   }
 
@@ -164,19 +217,19 @@ class SoundSystem {
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
       osc.type = 'triangle';
-      osc.frequency.setValueAtTime(150, now);
-      osc.frequency.exponentialRampToValueAtTime(30, now + 0.4);
+      osc.frequency.setValueAtTime(140, now);
+      osc.frequency.exponentialRampToValueAtTime(30, now + 0.38);
 
-      gain.gain.setValueAtTime(this.volume * 0.4, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+      gain.gain.setValueAtTime(this.volume * 0.45, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.42);
 
       osc.connect(gain);
       gain.connect(this.ctx.destination);
       osc.start(now);
-      osc.stop(now + 0.45);
+      osc.stop(now + 0.42);
 
       // Noise explosion burst
-      const bufferSize = this.ctx.sampleRate * 0.35;
+      const bufferSize = this.ctx.sampleRate * 0.32;
       const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
       const data = buffer.getChannelData(0);
       for (let i = 0; i < bufferSize; i++) {
@@ -188,12 +241,12 @@ class SoundSystem {
 
       const filter = this.ctx.createBiquadFilter();
       filter.type = 'lowpass';
-      filter.frequency.setValueAtTime(800, now);
-      filter.frequency.exponentialRampToValueAtTime(80, now + 0.35);
+      filter.frequency.setValueAtTime(850, now);
+      filter.frequency.exponentialRampToValueAtTime(80, now + 0.32);
 
       const noiseGain = this.ctx.createGain();
-      noiseGain.gain.setValueAtTime(this.volume * 0.35, now);
-      noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+      noiseGain.gain.setValueAtTime(this.volume * 0.38, now);
+      noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.32);
 
       noise.connect(filter);
       filter.connect(noiseGain);
@@ -214,16 +267,16 @@ class SoundSystem {
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
 
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(280, now);
-      osc.frequency.exponentialRampToValueAtTime(40, now + 0.6);
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(240, now);
+      osc.frequency.exponentialRampToValueAtTime(35, now + 0.6);
 
       const filter = this.ctx.createBiquadFilter();
       filter.type = 'lowpass';
-      filter.frequency.setValueAtTime(1200, now);
-      filter.frequency.exponentialRampToValueAtTime(100, now + 0.6);
+      filter.frequency.setValueAtTime(900, now);
+      filter.frequency.exponentialRampToValueAtTime(70, now + 0.6);
 
-      gain.gain.setValueAtTime(this.volume * 0.45, now);
+      gain.gain.setValueAtTime(this.volume * 0.4, now);
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.65);
 
       osc.connect(filter);

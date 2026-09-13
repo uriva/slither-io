@@ -18,7 +18,6 @@ import {
   TURN_SPEED,
   BOOST_TURN_SPEED,
   INITIAL_FOOD_COUNT,
-  MAX_FOOD_COUNT,
   PREY_COUNT,
   BOT_COUNT,
   SKINS,
@@ -41,7 +40,14 @@ export class GameEngine {
   public particles: Particle[] = [];
   public floatingTexts: FloatingText[] = [];
 
-  public camera = { x: 0, y: 0, zoom: 1.0, targetZoom: 1.0 };
+  public camera = {
+    x: 0,
+    y: 0,
+    zoom: 1.0,
+    baseZoom: 1.0,
+    userZoom: 1.0,
+    targetZoom: 1.0,
+  };
   public viewport = { width: 1200, height: 800 };
 
   public leaderboard: LeaderboardEntry[] = [];
@@ -56,8 +62,16 @@ export class GameEngine {
     maxRank: 999,
   };
 
-  private foodGrid = new SpatialGrid<Orb & GridItem>(160);
-  private bodyGrid = new SpatialGrid<BodySegmentItem>(140);
+  private foodGrid = new SpatialGrid<Orb & GridItem>(180);
+  private bodyGrid = new SpatialGrid<BodySegmentItem>(160);
+
+  // Reusable query arrays to avoid garbage collection
+  private orbQueryList: (Orb & GridItem)[] = [];
+  private bodyQueryList: BodySegmentItem[] = [];
+
+  // Pre-rendered sprite cache for high-performance orb drawing
+  private orbSprites: HTMLCanvasElement[] = [];
+  private preySprite: HTMLCanvasElement | null = null;
 
   private nextOrbId = 1;
   private nextTextId = 1;
@@ -74,7 +88,85 @@ export class GameEngine {
   public onStateUpdate?: (engine: GameEngine) => void;
 
   constructor() {
+    this.initOrbSprites();
     this.initOrbs();
+  }
+
+  // Pre-render orb textures to offscreen canvases once
+  private initOrbSprites(): void {
+    if (typeof document === 'undefined') return;
+
+    this.orbSprites = [];
+    const spriteSize = 64;
+    const center = spriteSize / 2;
+    const radius = 22;
+
+    for (const colorCfg of FOOD_COLORS) {
+      const canvas = document.createElement('canvas');
+      canvas.width = spriteSize;
+      canvas.height = spriteSize;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) continue;
+
+      // Outer soft glow gradient
+      const glowGrad = ctx.createRadialGradient(center, center, radius * 0.2, center, center, radius * 1.4);
+      glowGrad.addColorStop(0, colorCfg.glow);
+      glowGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = glowGrad;
+      ctx.beginPath();
+      ctx.arc(center, center, radius * 1.4, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Solid core
+      ctx.beginPath();
+      ctx.arc(center, center, radius, 0, Math.PI * 2);
+      ctx.fillStyle = colorCfg.color;
+      ctx.fill();
+
+      // Specular highlight
+      ctx.beginPath();
+      ctx.arc(center - radius * 0.3, center - radius * 0.3, radius * 0.35, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+      ctx.fill();
+
+      this.orbSprites.push(canvas);
+    }
+
+    // Pre-render wandering prey (firefly) sprite
+    const preyCanvas = document.createElement('canvas');
+    preyCanvas.width = 80;
+    preyCanvas.height = 80;
+    const pCtx = preyCanvas.getContext('2d');
+    if (pCtx) {
+      const pCenter = 40;
+      const pRadius = 24;
+
+      const pGlow = pCtx.createRadialGradient(pCenter, pCenter, pRadius * 0.2, pCenter, pCenter, pRadius * 1.6);
+      pGlow.addColorStop(0, 'rgba(255, 255, 0, 0.9)');
+      pGlow.addColorStop(0.6, 'rgba(255, 200, 0, 0.4)');
+      pGlow.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      pCtx.fillStyle = pGlow;
+      pCtx.beginPath();
+      pCtx.arc(pCenter, pCenter, pRadius * 1.6, 0, Math.PI * 2);
+      pCtx.fill();
+
+      pCtx.beginPath();
+      pCtx.arc(pCenter, pCenter, pRadius, 0, Math.PI * 2);
+      pCtx.fillStyle = '#ffff33';
+      pCtx.fill();
+
+      pCtx.beginPath();
+      pCtx.arc(pCenter - 6, pCenter - 6, 8, 0, Math.PI * 2);
+      pCtx.fillStyle = '#ffffff';
+      pCtx.fill();
+
+      this.preySprite = preyCanvas;
+    }
+  }
+
+  public handleWheel(deltaY: number): void {
+    const zoomFactor = deltaY < 0 ? 1.12 : 0.89;
+    this.camera.userZoom = Math.max(0.35, Math.min(2.4, this.camera.userZoom * zoomFactor));
   }
 
   public setViewport(width: number, height: number): void {
@@ -92,9 +184,9 @@ export class GameEngine {
 
     const selectedSkin = SKINS.find((s) => s.id === skinId) || SKINS[0];
 
-    // Create player snake near center with slight random offset
+    // Create player snake near center
     const playerStartAngle = Math.random() * Math.PI * 2;
-    const startDist = Math.random() * 600;
+    const startDist = Math.random() * 500;
     const px = Math.cos(playerStartAngle) * startDist;
     const py = Math.sin(playerStartAngle) * startDist;
 
@@ -120,6 +212,9 @@ export class GameEngine {
     this.camera.x = px;
     this.camera.y = py;
     this.camera.zoom = 1.0;
+    this.camera.userZoom = 1.0;
+    this.camera.baseZoom = 1.0;
+    this.camera.targetZoom = 1.0;
 
     // Populate bot snakes
     this.snakes = [this.player];
@@ -144,15 +239,23 @@ export class GameEngine {
     let oy = y;
 
     if (ox === undefined || oy === undefined) {
-      // Uniform random point within circular arena
-      const r = Math.sqrt(Math.random()) * (ARENA_RADIUS - 80);
+      const r = Math.sqrt(Math.random()) * (ARENA_RADIUS - 160);
       const theta = Math.random() * Math.PI * 2;
       ox = Math.cos(theta) * r;
       oy = Math.sin(theta) * r;
+    } else {
+      // Strictly clamp custom spawn positions (death drops, boost drops) inside boundary
+      const maxOrbDist = ARENA_RADIUS - 80;
+      const d = Math.hypot(ox, oy);
+      if (d > maxOrbDist) {
+        ox = (ox / d) * maxOrbDist;
+        oy = (oy / d) * maxOrbDist;
+      }
     }
 
-    const colorConfig = FOOD_COLORS[Math.floor(Math.random() * FOOD_COLORS.length)];
-    const baseR = isDeathDrop ? Math.min(18, 5 + value * 0.9) : Math.min(10, 4 + value * 0.8);
+    const colorIndex = Math.floor(Math.random() * FOOD_COLORS.length);
+    const colorConfig = FOOD_COLORS[colorIndex];
+    const baseR = isDeathDrop ? Math.min(22, 7 + value * 1.1) : Math.min(12, 5 + value * 0.9);
 
     this.orbs.push({
       id: this.nextOrbId++,
@@ -161,13 +264,14 @@ export class GameEngine {
       radius: baseR,
       color: colorConfig.color,
       glowColor: colorConfig.glow,
+      colorIndex,
       value: value,
       pulsePhase: Math.random() * Math.PI * 2,
     });
   }
 
   private spawnPrey(): void {
-    const r = Math.sqrt(Math.random()) * (ARENA_RADIUS - 300);
+    const r = Math.sqrt(Math.random()) * (ARENA_RADIUS - 400);
     const theta = Math.random() * Math.PI * 2;
     const ox = Math.cos(theta) * r;
     const oy = Math.sin(theta) * r;
@@ -176,13 +280,14 @@ export class GameEngine {
       id: this.nextOrbId++,
       x: ox,
       y: oy,
-      radius: 12,
+      radius: 14,
       color: '#fffb00',
       glowColor: 'rgba(255, 251, 0, 0.8)',
-      value: 35,
+      colorIndex: 3,
+      value: 40,
       isPrey: true,
       preyAngle: Math.random() * Math.PI * 2,
-      preySpeed: 3.5,
+      preySpeed: 4.2,
       pulsePhase: Math.random() * Math.PI * 2,
     });
   }
@@ -228,7 +333,7 @@ export class GameEngine {
       boostFuel: 0,
       turnSpeed: TURN_SPEED,
       trailTime: 0,
-      invulnerableTimer: isPlayer ? 180 : 90, // 3 seconds spawn protection
+      invulnerableTimer: isPlayer ? 180 : 90, // 3s spawn protection
       aiTimer: Math.floor(Math.random() * 60),
     };
   }
@@ -238,28 +343,27 @@ export class GameEngine {
     const currentBots = this.snakes.filter((s) => !s.isPlayer).length;
 
     for (let i = currentBots; i < targetBots; i++) {
-      const name = BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)] + (i > 25 ? `${i}` : '');
+      const name = BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)] + (i > 30 ? `${i}` : '');
       const skin = SKINS[Math.floor(Math.random() * SKINS.length)];
 
       let bx = 0;
       let by = 0;
       let attempts = 0;
 
-      // Ensure bots spawn a safe distance away from player
+      // Safe spawn distance from player
       do {
-        const r = 800 + Math.sqrt(Math.random()) * (ARENA_RADIUS - 1200);
+        const r = 900 + Math.sqrt(Math.random()) * (ARENA_RADIUS - 1400);
         const theta = Math.random() * Math.PI * 2;
         bx = Math.cos(theta) * r;
         by = Math.sin(theta) * r;
         attempts++;
       } while (
         this.player &&
-        Math.hypot(bx - this.player.head.x, by - this.player.head.y) < 700 &&
+        Math.hypot(bx - this.player.head.x, by - this.player.head.y) < 800 &&
         attempts < 10
       );
 
-      // Varied bot lengths for dynamic arena (some small, some giant titans)
-      const botLen = Math.floor(INITIAL_SNAKE_LENGTH + Math.random() * 60 + (Math.random() < 0.15 ? 120 : 0));
+      const botLen = Math.floor(INITIAL_SNAKE_LENGTH + Math.random() * 50 + (Math.random() < 0.15 ? 90 : 0));
       this.snakes.push(this.createSnake(`bot-${Date.now()}-${i}`, name, false, skin, bx, by, botLen));
     }
   }
@@ -270,7 +374,8 @@ export class GameEngine {
 
     this.update(dt);
 
-    if (this.onStateUpdate && this.gameTime % 4 === 0) {
+    // Sync state with React HUD at 6Hz to eliminate React reconciliation overhead
+    if (this.onStateUpdate && this.gameTime % 10 === 0) {
       this.onStateUpdate(this);
     }
 
@@ -294,7 +399,7 @@ export class GameEngine {
       this.stats.length = this.player.body.length;
       this.stats.kills = this.player.kills;
 
-      // Update player steering towards cursor
+      // Steering towards cursor in world coordinates
       const dx = this.mouseWorld.x - this.player.head.x;
       const dy = this.mouseWorld.y - this.player.head.y;
       if (Math.hypot(dx, dy) > 20) {
@@ -306,31 +411,31 @@ export class GameEngine {
       sound.setBoosting(wantsBoost);
     }
 
-    // Build Spatial Grids for fast O(1) queries
+    // Build Spatial Grids with zero string allocations
     this.foodGrid.clear();
     for (let i = 0; i < this.orbs.length; i++) {
-      const orb = this.orbs[i];
-      this.foodGrid.insert(orb as Orb & GridItem);
+      this.foodGrid.insert(this.orbs[i] as Orb & GridItem);
     }
 
     this.bodyGrid.clear();
     for (const snake of this.snakes) {
       if (snake.isDead) continue;
-      // Index segments (skip first 2 segments near neck to avoid self-clip false-positives)
-      for (let i = 2; i < snake.body.length; i++) {
+      // Stride segments to reduce collision grid size by 75% without losing collision accuracy
+      const stride = Math.max(2, Math.floor(snake.radius * 0.45));
+      for (let i = 2; i < snake.body.length; i += stride) {
         const seg = snake.body[i];
         this.bodyGrid.insert({
-          id: `${snake.id}-${i}`,
+          id: i,
           x: seg.x,
           y: seg.y,
-          radius: seg.radius,
+          radius: seg.radius * 1.15,
           snakeId: snake.id,
           segmentIndex: i,
         });
       }
     }
 
-    // Update AI for bots
+    // Update Bot AI
     for (const snake of this.snakes) {
       if (!snake.isPlayer && !snake.isDead) {
         BotAIController.updateBot(snake, this.snakes, this.bodyGrid, this.foodGrid);
@@ -343,10 +448,10 @@ export class GameEngine {
       this.updateSnakePhysics(snake);
     }
 
-    // Check Collisions (Head vs Body & Boundary)
+    // Check Collisions
     this.checkCollisions();
 
-    // Update Food Orbs & Prey fireflies
+    // Update Orbs & Prey
     this.updateOrbs();
 
     // Update Particles
@@ -355,32 +460,33 @@ export class GameEngine {
     // Update Floating Text & Kill Banner
     this.updateFloatingText();
 
-    // Respawn bots if population dropped
+    // Maintain bot population
     if (this.snakes.filter((s) => !s.isPlayer && !s.isDead).length < BOT_COUNT) {
       this.initBots();
     }
 
-    // Top off ambient food orbs
+    // Maintain ambient food
     if (this.orbs.length < INITIAL_FOOD_COUNT) {
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < 6; i++) {
         this.spawnOrb();
       }
     }
 
     // Update Leaderboard
-    if (this.gameTime % 20 === 0) {
+    if (this.gameTime % 25 === 0) {
       this.updateLeaderboard();
     }
 
-    // Smooth Camera Follow
+    // Smooth Camera Follow & Dynamic Zoom
     if (this.player && !this.player.isDead) {
       const lerp = 0.085;
       this.camera.x += (this.player.head.x - this.camera.x) * lerp;
       this.camera.y += (this.player.head.y - this.camera.y) * lerp;
 
-      // Dynamic zoom: scale out smoothly as snake grows
-      const targetZoom = Math.max(0.48, 1.0 / (1.0 + (this.player.radius - BASE_RADIUS) * 0.03));
-      this.camera.zoom += (targetZoom - this.camera.zoom) * 0.05;
+      // Base zoom scales with mass, userZoom modifies it via mouse wheel
+      this.camera.baseZoom = Math.max(0.38, 1.0 / (1.0 + (this.player.radius - BASE_RADIUS) * 0.024));
+      this.camera.targetZoom = this.camera.baseZoom * this.camera.userZoom;
+      this.camera.zoom += (this.camera.targetZoom - this.camera.zoom) * 0.1;
     }
   }
 
@@ -407,13 +513,11 @@ export class GameEngine {
       if (snake.boostFuel >= 7) {
         snake.boostFuel = 0;
         snake.score = Math.max(10, snake.score - 2);
-        snake.targetLength = Math.max(14, snake.targetLength - 1);
 
         // Spawn dropped mass orb from tail
         const tail = snake.body[snake.body.length - 1];
         if (tail) {
           this.spawnOrb(tail.x, tail.y, 2, false);
-          // Boost spark particle
           this.particles.push({
             x: tail.x + (Math.random() - 0.5) * 10,
             y: tail.y + (Math.random() - 0.5) * 10,
@@ -423,7 +527,7 @@ export class GameEngine {
             size: Math.random() * 4 + 3,
             alpha: 1,
             life: 0,
-            maxLife: 18,
+            maxLife: 16,
           });
         }
       }
@@ -436,19 +540,22 @@ export class GameEngine {
     snake.head.y += Math.sin(snake.angle) * snake.speed;
 
     // 4. Update Dynamic Radius and Target Length
+    // Logarithmic segment scaling: capped at 220 visual joints so performance never drops!
     snake.radius = Math.min(
       MAX_RADIUS,
       BASE_RADIUS + Math.sqrt(Math.max(0, snake.score)) * 0.42
     );
+    snake.targetLength = Math.min(
+      220,
+      INITIAL_SNAKE_LENGTH + Math.floor(Math.sqrt(Math.max(0, snake.score)) * 3.2)
+    );
 
-    // 5. Body Segment Kinematics (Inverse Distance Constraint with Serpentine Wiggle)
-    const spacing = Math.max(7, snake.radius * 0.58);
-    const waveAmp = snake.isBoosting ? 2.8 : 1.8;
-    const waveFreq = 0.16;
-
+    // 5. Body Segment Kinematics (Inverse Distance Constraint)
+    const spacing = Math.max(7, snake.radius * 0.55);
     snake.body[0] = { x: snake.head.x, y: snake.head.y, radius: snake.radius };
 
-    for (let i = 1; i < snake.body.length; i++) {
+    const bodyLen = snake.body.length;
+    for (let i = 1; i < bodyLen; i++) {
       const prev = snake.body[i - 1];
       const curr = snake.body[i];
 
@@ -463,7 +570,7 @@ export class GameEngine {
       }
 
       // Taper radius slightly toward tail
-      const taper = Math.max(0.65, 1 - (i / snake.body.length) * 0.35);
+      const taper = Math.max(0.65, 1 - (i / bodyLen) * 0.35);
       curr.radius = snake.radius * taper;
     }
 
@@ -479,18 +586,19 @@ export class GameEngine {
     // 6. Food Eating & Pickup Magnetism
     const pickupRadius = snake.radius * 2.2;
     const eatRadius = snake.radius * 1.05;
-    const nearbyOrbs = this.foodGrid.query(snake.head.x, snake.head.y, pickupRadius);
 
-    for (const orb of nearbyOrbs) {
+    this.orbQueryList.length = 0;
+    this.foodGrid.queryInto(snake.head.x, snake.head.y, pickupRadius, this.orbQueryList);
+
+    for (let i = 0; i < this.orbQueryList.length; i++) {
+      const orb = this.orbQueryList[i];
       const odx = snake.head.x - orb.x;
       const ody = snake.head.y - orb.y;
       const odist = Math.hypot(odx, ody);
 
       if (odist <= eatRadius + orb.radius) {
-        // Orb Eaten!
         this.eatOrb(snake, orb);
       } else if (odist <= pickupRadius) {
-        // Gravitational magnetic pull into mouth
         const pullSpeed = (1 - odist / pickupRadius) * 10;
         orb.x += (odx / odist) * pullSpeed;
         orb.y += (ody / odist) * pullSpeed;
@@ -506,7 +614,6 @@ export class GameEngine {
 
     const gain = orb.value;
     snake.score += gain * 2;
-    snake.targetLength += Math.max(1, Math.floor(gain * 0.6));
 
     if (snake.isPlayer) {
       this.stats.foodEaten += 1;
@@ -514,9 +621,8 @@ export class GameEngine {
 
       if (orb.isPrey) {
         this.addFloatingText('+50 FIREFLY!', snake.head.x, snake.head.y - 20, '#ffff00');
-        // Spawn ring burst particles
-        for (let p = 0; p < 16; p++) {
-          const a = (p / 16) * Math.PI * 2;
+        for (let p = 0; p < 12; p++) {
+          const a = (p / 12) * Math.PI * 2;
           this.particles.push({
             x: orb.x,
             y: orb.y,
@@ -526,7 +632,7 @@ export class GameEngine {
             size: 5,
             alpha: 1,
             life: 0,
-            maxLife: 25,
+            maxLife: 20,
           });
         }
       }
@@ -536,7 +642,7 @@ export class GameEngine {
   private checkCollisions(): void {
     for (const snake of this.snakes) {
       if (snake.isDead) continue;
-      if (snake.invulnerableTimer > 0) continue; // Spawn protection active
+      if (snake.invulnerableTimer > 0) continue; // Spawn protection
 
       const hx = snake.head.x;
       const hy = snake.head.y;
@@ -548,9 +654,11 @@ export class GameEngine {
       }
 
       // 2. Head-to-Body Collision with other snakes
-      const nearbySegments = this.bodyGrid.query(hx, hy, snake.radius * 1.5);
+      this.bodyQueryList.length = 0;
+      this.bodyGrid.queryInto(hx, hy, snake.radius * 1.5, this.bodyQueryList);
 
-      for (const seg of nearbySegments) {
+      for (let i = 0; i < this.bodyQueryList.length; i++) {
+        const seg = this.bodyQueryList[i];
         if (seg.snakeId === snake.id) continue; // Cannot hit own body!
 
         const dist = Math.hypot(hx - seg.x, hy - seg.y);
@@ -562,8 +670,8 @@ export class GameEngine {
             if (killer.isPlayer) {
               this.stats.kills += 1;
               sound.playKill();
-              this.triggerKillBanner(`ELIMINATED ${snake.name}! +${snake.score} MASS`);
-              this.addFloatingText(`KILL! +${snake.score}`, hx, hy - 40, '#00f0ff', 1.4);
+              this.triggerKillBanner(`ELIMINATED ${snake.name}! +${Math.floor(snake.score)} MASS`);
+              this.addFloatingText(`KILL! +${Math.floor(snake.score)}`, hx, hy - 40, '#00f0ff', 1.4);
             }
           }
           break;
@@ -577,16 +685,16 @@ export class GameEngine {
     snake.isDead = true;
 
     // Drop luminous mass orbs along snake's former body segments
-    const step = Math.max(1, Math.floor(snake.body.length / 45));
+    const step = Math.max(1, Math.floor(snake.body.length / 35));
     for (let i = 0; i < snake.body.length; i += step) {
       const seg = snake.body[i];
       const scatter = (Math.random() - 0.5) * snake.radius * 2;
-      const orbVal = Math.min(15, Math.max(4, Math.floor(snake.score / 25)));
+      const orbVal = Math.min(18, Math.max(4, Math.floor(snake.score / 25)));
       this.spawnOrb(seg.x + scatter, seg.y + scatter, orbVal, true);
     }
 
     // Supernova particle shockwave
-    const particleCount = Math.min(60, 20 + Math.floor(snake.score / 20));
+    const particleCount = Math.min(45, 18 + Math.floor(snake.score / 30));
     for (let i = 0; i < particleCount; i++) {
       const a = Math.random() * Math.PI * 2;
       const spd = Math.random() * 8 + 2;
@@ -596,10 +704,10 @@ export class GameEngine {
         vx: Math.cos(a) * spd,
         vy: Math.sin(a) * spd,
         color: snake.skin.particleColor,
-        size: Math.random() * 6 + 4,
+        size: Math.random() * 6 + 3,
         alpha: 1,
         life: 0,
-        maxLife: Math.random() * 25 + 20,
+        maxLife: Math.random() * 20 + 16,
       });
     }
 
@@ -614,31 +722,40 @@ export class GameEngine {
   }
 
   private updateOrbs(): void {
+    const maxOrbDist = ARENA_RADIUS - 70;
+
     for (let i = this.orbs.length - 1; i >= 0; i--) {
       const orb = this.orbs[i];
       orb.pulsePhase += 0.05;
 
-      // Prey (Firefly) dynamic movement & evasion
       if (orb.isPrey) {
         orb.preyAngle = (orb.preyAngle || 0) + (Math.random() - 0.5) * 0.2;
-        orb.x += Math.cos(orb.preyAngle) * (orb.preySpeed || 3.5);
-        orb.y += Math.sin(orb.preyAngle) * (orb.preySpeed || 3.5);
+        orb.x += Math.cos(orb.preyAngle) * (orb.preySpeed || 4.2);
+        orb.y += Math.sin(orb.preyAngle) * (orb.preySpeed || 4.2);
 
-        // Turn back if near boundary
-        if (Math.hypot(orb.x, orb.y) > ARENA_RADIUS - 150) {
-          orb.preyAngle = Math.atan2(-orb.y, -orb.x);
-        }
-
-        // Flee from nearby snake heads
+        // Flee sprint from nearby snake heads
         for (const snake of this.snakes) {
           if (snake.isDead) continue;
           const d = Math.hypot(snake.head.x - orb.x, snake.head.y - orb.y);
-          if (d < 220) {
+          if (d < 240) {
             orb.preyAngle = Math.atan2(orb.y - snake.head.y, orb.x - snake.head.x);
-            orb.preySpeed = 5.5; // Flee sprint
+            orb.preySpeed = 6.0;
             break;
           }
         }
+
+        // Steer back inside if approaching boundary
+        const currentDist = Math.hypot(orb.x, orb.y);
+        if (currentDist > ARENA_RADIUS - 350) {
+          orb.preyAngle = Math.atan2(-orb.y, -orb.x);
+        }
+      }
+
+      // Hard clamp so no orb can ever be outside the red circle
+      const dist = Math.hypot(orb.x, orb.y);
+      if (dist > maxOrbDist) {
+        orb.x = (orb.x / dist) * maxOrbDist;
+        orb.y = (orb.y / dist) * maxOrbDist;
       }
     }
   }
@@ -718,43 +835,43 @@ export class GameEngine {
   public render(ctx: CanvasRenderingContext2D): void {
     const { width, height } = this.viewport;
 
-    // Clear Canvas
     ctx.clearRect(0, 0, width, height);
 
-    // Save Context for World Camera
     ctx.save();
     ctx.translate(width / 2, height / 2);
     ctx.scale(this.camera.zoom, this.camera.zoom);
     ctx.translate(-this.camera.x, -this.camera.y);
 
-    // 1. Draw Deep Cyber Space Grid Background
+    // 1. Cyber Space Grid Matrix
     this.drawBackground(ctx);
 
-    // 2. Draw Arena Boundary Barrier Wall
+    // 2. Arena Boundary Wall
     this.drawBoundary(ctx);
 
-    // 3. Draw Food Orbs & Fireflies
+    // 3. Ultra-Fast Cached Food Orbs
     this.drawOrbs(ctx);
 
-    // 4. Draw Boost Trails & Particles
+    // 4. Particles & Spark Trails
     this.drawParticles(ctx);
 
-    // 5. Draw All Snakes (Tail to Head)
+    // 5. Optimized High-Performance Snakes
     this.drawSnakes(ctx);
 
-    // 6. Draw World Floating Texts
+    // 6. Floating In-Game Texts
     this.drawFloatingTexts(ctx);
 
     ctx.restore();
   }
 
   private drawBackground(ctx: CanvasRenderingContext2D): void {
-    // Hexagonal / Grid Matrix background
-    const gridSize = 120;
-    const viewLeft = this.camera.x - this.viewport.width / (2 * this.camera.zoom);
-    const viewRight = this.camera.x + this.viewport.width / (2 * this.camera.zoom);
-    const viewTop = this.camera.y - this.viewport.height / (2 * this.camera.zoom);
-    const viewBottom = this.camera.y + this.viewport.height / (2 * this.camera.zoom);
+    const gridSize = 140;
+    const halfW = (this.viewport.width / (2 * this.camera.zoom)) + 140;
+    const halfH = (this.viewport.height / (2 * this.camera.zoom)) + 140;
+
+    const viewLeft = this.camera.x - halfW;
+    const viewRight = this.camera.x + halfW;
+    const viewTop = this.camera.y - halfH;
+    const viewBottom = this.camera.y + halfH;
 
     const startX = Math.floor(viewLeft / gridSize) * gridSize;
     const endX = Math.ceil(viewRight / gridSize) * gridSize;
@@ -775,8 +892,8 @@ export class GameEngine {
     }
     ctx.stroke();
 
-    // Subtle grid intersection stars
-    ctx.fillStyle = 'rgba(0, 240, 255, 0.15)';
+    // Subtle star nodes
+    ctx.fillStyle = 'rgba(0, 240, 255, 0.16)';
     for (let x = startX; x <= endX; x += gridSize) {
       for (let y = startY; y <= endY; y += gridSize) {
         if (x * x + y * y <= ARENA_RADIUS * ARENA_RADIUS) {
@@ -789,7 +906,6 @@ export class GameEngine {
   private drawBoundary(ctx: CanvasRenderingContext2D): void {
     const pulse = 0.5 + Math.sin(this.gameTime * 0.04) * 0.2;
 
-    // Outer Void Ring
     ctx.save();
     ctx.beginPath();
     ctx.arc(0, 0, ARENA_RADIUS, 0, Math.PI * 2);
@@ -797,51 +913,56 @@ export class GameEngine {
     ctx.strokeStyle = `rgba(255, 30, 80, ${pulse * 0.4})`;
     ctx.stroke();
 
-    // Sharp Laser Edge
     ctx.beginPath();
     ctx.arc(0, 0, ARENA_RADIUS, 0, Math.PI * 2);
     ctx.lineWidth = 4;
     ctx.strokeStyle = `rgba(255, 50, 100, ${pulse + 0.3})`;
     ctx.shadowColor = '#ff2255';
-    ctx.shadowBlur = 20;
+    ctx.shadowBlur = 18;
     ctx.stroke();
     ctx.restore();
   }
 
   private drawOrbs(ctx: CanvasRenderingContext2D): void {
-    const viewLeft = this.camera.x - (this.viewport.width / (2 * this.camera.zoom)) - 50;
-    const viewRight = this.camera.x + (this.viewport.width / (2 * this.camera.zoom)) + 50;
-    const viewTop = this.camera.y - (this.viewport.height / (2 * this.camera.zoom)) - 50;
-    const viewBottom = this.camera.y + (this.viewport.height / (2 * this.camera.zoom)) + 50;
+    const halfW = (this.viewport.width / (2 * this.camera.zoom)) + 40;
+    const halfH = (this.viewport.height / (2 * this.camera.zoom)) + 40;
+    const viewLeft = this.camera.x - halfW;
+    const viewRight = this.camera.x + halfW;
+    const viewTop = this.camera.y - halfH;
+    const viewBottom = this.camera.y + halfH;
+
+    const hasSprites = this.orbSprites.length > 0;
+    const maxDrawRadiusSq = (ARENA_RADIUS - 30) * (ARENA_RADIUS - 30);
 
     for (let i = 0; i < this.orbs.length; i++) {
       const orb = this.orbs[i];
       if (orb.x < viewLeft || orb.x > viewRight || orb.y < viewTop || orb.y > viewBottom) {
         continue;
       }
+      // Never draw food pellets outside the red barrier circle
+      if (orb.x * orb.x + orb.y * orb.y > maxDrawRadiusSq) {
+        continue;
+      }
 
-      const pulse = 1 + Math.sin(orb.pulsePhase) * 0.15;
+      const pulse = 1 + Math.sin(orb.pulsePhase) * 0.12;
       const r = orb.radius * pulse;
 
-      // Outer soft glow
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(orb.x, orb.y, r * 1.6, 0, Math.PI * 2);
-      ctx.fillStyle = orb.glowColor;
-      ctx.fill();
-
-      // Core sphere
-      ctx.beginPath();
-      ctx.arc(orb.x, orb.y, r, 0, Math.PI * 2);
-      ctx.fillStyle = orb.color;
-      ctx.fill();
-
-      // White inner glint
-      ctx.beginPath();
-      ctx.arc(orb.x - r * 0.3, orb.y - r * 0.3, r * 0.35, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
-      ctx.fill();
-      ctx.restore();
+      if (hasSprites) {
+        if (orb.isPrey && this.preySprite) {
+          ctx.drawImage(this.preySprite, orb.x - r * 1.5, orb.y - r * 1.5, r * 3, r * 3);
+        } else {
+          const sprite = this.orbSprites[orb.colorIndex || 0];
+          if (sprite) {
+            ctx.drawImage(sprite, orb.x - r * 1.4, orb.y - r * 1.4, r * 2.8, r * 2.8);
+          }
+        }
+      } else {
+        // Fallback if sprites not initialized
+        ctx.beginPath();
+        ctx.arc(orb.x, orb.y, r, 0, Math.PI * 2);
+        ctx.fillStyle = orb.color;
+        ctx.fill();
+      }
     }
   }
 
@@ -853,19 +974,41 @@ export class GameEngine {
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.size * (1 - p.life / p.maxLife), 0, Math.PI * 2);
       ctx.fillStyle = p.color;
-      ctx.shadowColor = p.color;
-      ctx.shadowBlur = 10;
       ctx.fill();
       ctx.restore();
     }
   }
 
   private drawSnakes(ctx: CanvasRenderingContext2D): void {
-    // Sort so smaller snakes are drawn first and larger snakes overlay them
+    const halfW = (this.viewport.width / (2 * this.camera.zoom)) + 200;
+    const halfH = (this.viewport.height / (2 * this.camera.zoom)) + 200;
+    const viewLeft = this.camera.x - halfW;
+    const viewRight = this.camera.x + halfW;
+    const viewTop = this.camera.y - halfH;
+    const viewBottom = this.camera.y + halfH;
+
     const sortedSnakes = [...this.snakes].filter((s) => !s.isDead);
     sortedSnakes.sort((a, b) => a.score - b.score);
 
     for (const snake of sortedSnakes) {
+      // Frustum culling: Skip snakes completely outside screen
+      if (
+        snake.head.x < viewLeft && snake.body[snake.body.length - 1].x < viewLeft ||
+        snake.head.x > viewRight && snake.body[snake.body.length - 1].x > viewRight ||
+        snake.head.y < viewTop && snake.body[snake.body.length - 1].y < viewTop ||
+        snake.head.y > viewBottom && snake.body[snake.body.length - 1].y > viewBottom
+      ) {
+        let inView = false;
+        for (let i = 0; i < snake.body.length; i += 8) {
+          const s = snake.body[i];
+          if (s.x >= viewLeft && s.x <= viewRight && s.y >= viewTop && s.y <= viewBottom) {
+            inView = true;
+            break;
+          }
+        }
+        if (!inView) continue;
+      }
+
       this.drawSingleSnake(ctx, snake);
     }
   }
@@ -877,11 +1020,40 @@ export class GameEngine {
 
     ctx.save();
 
-    // 1. Draw Body Segments (Tail to Neck)
-    for (let i = bodyLen - 1; i >= 1; i--) {
+    // 1. If Boosting: Draw single smooth continuous glow aura behind snake (1 fast draw call)
+    if (snake.isBoosting) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(snake.body[0].x, snake.body[0].y);
+      for (let i = 1; i < bodyLen; i += 2) {
+        ctx.lineTo(snake.body[i].x, snake.body[i].y);
+      }
+      ctx.lineWidth = snake.radius * 2.8;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = skin.particleColor;
+      ctx.globalAlpha = 0.35;
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // 2. Base Smooth Continuous Body Stroke (ultra-smooth liquid spine)
+    ctx.beginPath();
+    ctx.moveTo(snake.body[bodyLen - 1].x, snake.body[bodyLen - 1].y);
+    for (let i = bodyLen - 2; i >= 0; i--) {
+      ctx.lineTo(snake.body[i].x, snake.body[i].y);
+    }
+    ctx.lineWidth = snake.radius * 1.9;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = skin.colors[0];
+    ctx.stroke();
+
+    // 3. Draw Decorative Segment Discs with optimal stride (no redundant overdraw)
+    const drawStep = Math.max(1, Math.floor(snake.radius * 0.28));
+    for (let i = bodyLen - 1; i >= 1; i -= drawStep) {
       const seg = snake.body[i];
 
-      // Determine segment color based on skin pattern
       let segColor = skin.colors[0];
       if (skin.pattern === 'stripes') {
         segColor = skin.colors[i % skin.colors.length];
@@ -895,38 +1067,31 @@ export class GameEngine {
         segColor = skin.colors[p];
       }
 
-      // Outer segment circle
       ctx.beginPath();
       ctx.arc(seg.x, seg.y, seg.radius, 0, Math.PI * 2);
       ctx.fillStyle = segColor;
-      ctx.shadowColor = snake.isBoosting ? skin.particleColor : 'transparent';
-      ctx.shadowBlur = snake.isBoosting ? 14 : 0;
       ctx.fill();
 
-      // Inner highlight circle for 3D liquid scale effect
+      // Specular 3D highlight
       ctx.beginPath();
-      ctx.arc(seg.x - seg.radius * 0.15, seg.y - seg.radius * 0.15, seg.radius * 0.65, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.18)';
+      ctx.arc(seg.x - seg.radius * 0.15, seg.y - seg.radius * 0.15, seg.radius * 0.55, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.22)';
       ctx.fill();
     }
 
-    // 2. Draw Snake Head
+    // 4. Draw Snake Head
     const head = snake.head;
     ctx.beginPath();
     ctx.arc(head.x, head.y, snake.radius * 1.15, 0, Math.PI * 2);
     ctx.fillStyle = skin.headColor;
-    ctx.shadowColor = skin.glowColor;
-    ctx.shadowBlur = 18;
     ctx.fill();
-    ctx.shadowBlur = 0;
 
-    // 3. Draw Eyes
+    // 5. Draw Eyes
     const eyeAngle = snake.angle;
     const eyeDist = snake.radius * 0.65;
     const eyeRadius = snake.radius * 0.38;
     const pupilRadius = eyeRadius * 0.55;
 
-    // Left eye & Right eye offsets perpendicular to angle
     const perpAngle = eyeAngle + Math.PI / 2;
     const lx = head.x + Math.cos(eyeAngle) * (eyeDist * 0.7) + Math.cos(perpAngle) * (eyeDist * 0.8);
     const ly = head.y + Math.sin(eyeAngle) * (eyeDist * 0.7) + Math.sin(perpAngle) * (eyeDist * 0.8);
@@ -934,14 +1099,12 @@ export class GameEngine {
     const rx = head.x + Math.cos(eyeAngle) * (eyeDist * 0.7) - Math.cos(perpAngle) * (eyeDist * 0.8);
     const ry = head.y + Math.sin(eyeAngle) * (eyeDist * 0.7) - Math.sin(perpAngle) * (eyeDist * 0.8);
 
-    // Sclera (White eye ball)
     ctx.beginPath();
     ctx.arc(lx, ly, eyeRadius, 0, Math.PI * 2);
     ctx.arc(rx, ry, eyeRadius, 0, Math.PI * 2);
     ctx.fillStyle = skin.eyeColor;
     ctx.fill();
 
-    // Pupil (looks forward along snake's heading)
     const pupilOffset = eyeRadius * 0.35;
     const plx = lx + Math.cos(eyeAngle) * pupilOffset;
     const ply = ly + Math.sin(eyeAngle) * pupilOffset;
@@ -954,14 +1117,12 @@ export class GameEngine {
     ctx.fillStyle = '#06070c';
     ctx.fill();
 
-    // 4. Draw Crown if #1 on Leaderboard
+    // 6. Draw Crown if #1 on Leaderboard
     const isTopLeader = this.leaderboard.length > 0 && this.leaderboard[0].id === snake.id;
     if (isTopLeader) {
       ctx.save();
       ctx.translate(head.x, head.y - snake.radius * 1.5);
       ctx.fillStyle = '#ffd700';
-      ctx.shadowColor = '#ffd700';
-      ctx.shadowBlur = 12;
 
       ctx.beginPath();
       ctx.moveTo(-12, 0);
@@ -976,15 +1137,17 @@ export class GameEngine {
       ctx.restore();
     }
 
-    // 5. Draw Name Tag and Score
+    // 7. Draw Name Tag and Score
     ctx.font = `600 ${Math.max(12, snake.radius * 0.8)}px sans-serif`;
     ctx.textAlign = 'center';
     ctx.fillStyle = snake.isPlayer ? '#00f0ff' : 'rgba(255, 255, 255, 0.85)';
-    ctx.shadowColor = '#000000';
-    ctx.shadowBlur = 4;
-    ctx.fillText(`${snake.name} (${Math.floor(snake.score)})`, head.x, head.y - snake.radius * 1.5 - (isTopLeader ? 16 : 4));
+    ctx.fillText(
+      `${snake.name} (${Math.floor(snake.score)})`,
+      head.x,
+      head.y - snake.radius * 1.5 - (isTopLeader ? 16 : 4)
+    );
 
-    // 6. Draw Spawn Protection Shield
+    // 8. Draw Spawn Protection Shield
     if (snake.invulnerableTimer > 0) {
       const shieldPulse = 0.5 + Math.sin(this.gameTime * 0.25) * 0.35;
       ctx.save();
@@ -992,8 +1155,6 @@ export class GameEngine {
       ctx.arc(head.x, head.y, snake.radius * 1.6, 0, Math.PI * 2);
       ctx.strokeStyle = `rgba(0, 240, 255, ${shieldPulse})`;
       ctx.lineWidth = 3;
-      ctx.shadowColor = '#00f0ff';
-      ctx.shadowBlur = 15;
       ctx.stroke();
 
       ctx.beginPath();
@@ -1014,8 +1175,6 @@ export class GameEngine {
       ctx.font = `bold ${Math.round(20 * t.scale)}px sans-serif`;
       ctx.textAlign = 'center';
       ctx.fillStyle = t.color;
-      ctx.shadowColor = t.color;
-      ctx.shadowBlur = 12;
       ctx.fillText(t.text, t.x, t.y);
       ctx.restore();
     }

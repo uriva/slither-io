@@ -10,6 +10,7 @@ import { GameOverModal } from './GameOverModal';
 export const SlitherGame: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const engineRef = useRef<GameEngine | null>(null);
+  const lastPinchDistRef = useRef<number | null>(null);
 
   const [gameState, setGameState] = useState<'menu' | 'playing' | 'gameover'>('menu');
   const [highScore, setHighScore] = useState<number>(0);
@@ -18,10 +19,10 @@ export const SlitherGame: React.FC = () => {
   const [lastPlayerConfig, setLastPlayerConfig] = useState({ name: 'QuantumViper', skinId: 'void-dragon' });
   const [isTouchDevice, setIsTouchDevice] = useState(false);
 
-  // Force re-renders for HUD updates at 15fps
+  // Periodic state refresh for HUD
   const [, setTick] = useState(0);
 
-  // Load High Score from localStorage on mount
+  // Load High Score
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('slither_highscore');
@@ -32,7 +33,7 @@ export const SlitherGame: React.FC = () => {
     }
   }, []);
 
-  // Initialize GameEngine instance
+  // Initialize Game Engine
   useEffect(() => {
     const engine = new GameEngine();
     engineRef.current = engine;
@@ -88,6 +89,21 @@ export const SlitherGame: React.FC = () => {
     };
   }, []);
 
+  // Mouse Wheel Zoom In / Out Listener
+  useEffect(() => {
+    const handleWheelEvent = (e: WheelEvent) => {
+      if (gameState === 'playing' && engineRef.current) {
+        e.preventDefault();
+        engineRef.current.handleWheel(e.deltaY);
+      }
+    };
+
+    window.addEventListener('wheel', handleWheelEvent, { passive: false });
+    return () => {
+      window.removeEventListener('wheel', handleWheelEvent);
+    };
+  }, [gameState]);
+
   // Main Canvas Render Loop
   useEffect(() => {
     let animId: number;
@@ -114,7 +130,7 @@ export const SlitherGame: React.FC = () => {
     return () => cancelAnimationFrame(animId);
   }, [gameState]);
 
-  // Mouse & Touch Input handlers
+  // Mouse Input handlers
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const engine = engineRef.current;
     if (!engine) return;
@@ -123,7 +139,6 @@ export const SlitherGame: React.FC = () => {
     const clientX = e.clientX - rect.left;
     const clientY = e.clientY - rect.top;
 
-    // Convert screen coordinates to world coordinates through camera
     const worldX = (clientX - engine.viewport.width / 2) / engine.camera.zoom + engine.camera.x;
     const worldY = (clientY - engine.viewport.height / 2) / engine.camera.zoom + engine.camera.y;
 
@@ -142,10 +157,29 @@ export const SlitherGame: React.FC = () => {
     }
   }, []);
 
-  // Touch handlers for mobile
+  // Touch handlers for mobile (drag to steer + pinch to zoom)
+  const handleTouchStart = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      lastPinchDistRef.current = Math.hypot(dx, dy);
+    }
+  }, []);
+
   const handleTouchMove = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
     const engine = engineRef.current;
     if (!engine || e.touches.length === 0) return;
+
+    // Pinch-to-zoom
+    if (e.touches.length === 2 && lastPinchDistRef.current !== null) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      const dist = Math.hypot(dx, dy);
+      const delta = lastPinchDistRef.current - dist;
+      engine.handleWheel(delta * 5);
+      lastPinchDistRef.current = dist;
+      return;
+    }
 
     const touch = e.touches[0];
     const rect = e.currentTarget.getBoundingClientRect();
@@ -156,6 +190,10 @@ export const SlitherGame: React.FC = () => {
     const worldY = (clientY - engine.viewport.height / 2) / engine.camera.zoom + engine.camera.y;
 
     engine.mouseWorld = { x: worldX, y: worldY };
+  }, []);
+
+  const handleTouchEnd = useCallback(() => {
+    lastPinchDistRef.current = null;
   }, []);
 
   // Keyboard handlers (Space to boost)
@@ -215,8 +253,9 @@ export const SlitherGame: React.FC = () => {
         onMouseMove={handleMouseMove}
         onMouseDown={handleMouseDown}
         onMouseUp={handleMouseUp}
+        onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
-        onTouchStart={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
         className="block w-full h-full cursor-crosshair touch-none"
       />
 
@@ -234,6 +273,12 @@ export const SlitherGame: React.FC = () => {
           }}
           onBoostEnd={() => {
             if (engineRef.current) engineRef.current.isMouseDown = false;
+          }}
+          onZoomIn={() => {
+            if (engineRef.current) engineRef.current.handleWheel(-100);
+          }}
+          onZoomOut={() => {
+            if (engineRef.current) engineRef.current.handleWheel(100);
           }}
           isTouchDevice={isTouchDevice}
         />
