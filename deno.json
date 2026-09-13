@@ -1,0 +1,12 @@
+{
+  "nodeModulesDir": "auto",
+  "tasks": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "deploy": {
+    "org": "uriva",
+    "app": "slither-io"
+  }
+}
