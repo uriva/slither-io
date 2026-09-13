@@ -269,8 +269,12 @@ export const StartScreen: React.FC<StartScreenProps> = ({ onPlay, highScore }) =
             {/* Play Button */}
             <Button
               type="submit"
+              onClick={() => {
+                sound.init();
+                onPlay(playerName, currentSkin.id);
+              }}
               size="lg"
-              className="w-full h-12 bg-gradient-to-r from-cyan-500 hover:from-cyan-400 to-blue-600 hover:to-blue-500 text-slate-950 font-mono font-black text-base tracking-wider uppercase shadow-[0_0_25px_rgba(0,240,255,0.45)] transition-all hover:scale-[1.02] active:scale-[0.98] border border-cyan-300/40 rounded-xl flex items-center justify-center gap-2"
+              className="w-full h-12 bg-gradient-to-r from-cyan-500 hover:from-cyan-400 to-blue-600 hover:to-blue-500 text-slate-950 font-mono font-black text-base tracking-wider uppercase shadow-[0_0_25px_rgba(0,240,255,0.45)] transition-all hover:scale-[1.02] active:scale-[0.98] border border-cyan-300/40 rounded-xl flex items-center justify-center gap-2 cursor-pointer"
             >
               <Play className="w-5 h-5 fill-slate-950" />
               SLITHER INTO ARENA
