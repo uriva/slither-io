@@ -14,17 +14,17 @@ export const db = init({
 });
 
 export const SECTORS = [
-  'sector-alpha',
-  'sector-beta',
-  'sector-gamma',
-  'sector-delta',
-  'sector-omega',
+  'sector-alpha-v3',
+  'sector-beta-v3',
+  'sector-gamma-v3',
+  'sector-delta-v3',
+  'sector-omega-v3',
 ];
 
 export const MAX_PLAYERS_PER_ROOM = 10;
 
-export const getArenaRoom = (roomId: string = 'sector-alpha') => {
+export const getArenaRoom = (roomId: string = 'sector-alpha-v3') => {
   return db.room('arena', roomId);
 };
 
-export const arenaRoom = getArenaRoom('sector-alpha');
+export const arenaRoom = getArenaRoom('sector-alpha-v3');

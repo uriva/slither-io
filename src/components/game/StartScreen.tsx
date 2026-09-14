@@ -16,7 +16,14 @@ interface StartScreenProps {
 }
 
 export const StartScreen: React.FC<StartScreenProps> = ({ onPlay, highScore, onlineCount, roomId }) => {
-  const [playerName, setPlayerName] = useState('QuantumViper');
+  const [playerName, setPlayerName] = useState(() => {
+    const prefixes = ['Hyper', 'Cyber', 'Neon', 'Cosmic', 'Solar', 'Quantum', 'Shadow', 'Apex', 'Vortex', 'Glitch'];
+    const roots = ['Viper', 'Drake', 'Serpent', 'Titan', 'Ghost', 'Strike', 'Hydra', 'Basilisk', 'Reaper', 'Spectre'];
+    const p = prefixes[Math.floor(Math.random() * prefixes.length)];
+    const r = roots[Math.floor(Math.random() * roots.length)];
+    const num = Math.floor(Math.random() * 90 + 10);
+    return `${p}${r}${num}`;
+  });
   const [selectedSkinIndex, setSelectedSkinIndex] = useState(0);
   const [isMuted, setIsMuted] = useState(sound.getMuted());
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);

@@ -16,6 +16,12 @@ export const metadata: Metadata = {
   title: "Slither.io — Cyber Serpent Arena | Deno Next.js",
   description: "Next-generation Slither.io remake powered by Deno and Next.js. Slither, boost, eat glowing orbs, outmaneuver rivals, and dominate the arena leaderboard!",
   keywords: ["slither.io", "next.js", "deno", "game", "canvas", "serpent", "snake"],
+  icons: {
+    icon: [
+      { url: "/icon.svg", type: "image/svg+xml" },
+    ],
+    apple: "/icon.svg",
+  },
 };
 
 export default function RootLayout({

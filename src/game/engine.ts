@@ -492,11 +492,12 @@ export class GameEngine {
     const peerIds = new Set(Object.keys(peers));
     const now = Date.now();
 
-    // 1. Remove disconnected remote human snakes
+    // 1. Remove disconnected or stale remote human snakes (no updates in > 3.5s)
     for (let i = this.snakes.length - 1; i >= 0; i--) {
       const s = this.snakes[i];
       if (s.isRemoteHuman) {
-        if (!peerIds.has(s.id) || (peers[s.id] && now - (peers[s.id].updatedAt || 0) > 8000)) {
+        const peer = peers[s.id] || Object.values(peers).find((p) => p.id === s.id);
+        if (!peer || !peer.updatedAt || (now - peer.updatedAt > 3500)) {
           this.snakes.splice(i, 1);
         }
       }
@@ -506,10 +507,16 @@ export class GameEngine {
     for (const [peerId, peer] of Object.entries(peers)) {
       if (!peer || !peer.head) continue;
 
+      // Drop stale peer updates immediately so they never spawn or jitter
+      if (!peer.updatedAt || (now - peer.updatedAt > 3500)) continue;
+
       // Bulletproof self-filtering: never spawn yourself
       if (myPeerId && (peerId === myPeerId || peer.id === myPeerId)) continue;
       if (myPlayerId && (peer.id === myPlayerId || peerId === myPlayerId)) continue;
       if (this.player && (peer.id === this.player.id || peerId === this.player.id)) continue;
+      if (this.player && peer.name === this.player.name && Math.hypot(peer.head.x - this.player.head.x, peer.head.y - this.player.head.y) < 15) {
+        continue;
+      }
 
       let remoteSnake = this.snakes.find((s) => s.id === peerId || s.id === peer.id);
 
