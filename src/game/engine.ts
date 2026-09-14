@@ -96,6 +96,7 @@ export class GameEngine {
 
   // Input states
   public mouseWorld: Point = { x: 0, y: 0 };
+  public mouseCanvas: Point | null = null;
   public isMouseDown: boolean = false;
   public isSpaceDown: boolean = false;
 
@@ -250,11 +251,30 @@ export class GameEngine {
   public handleWheel(deltaY: number): void {
     const zoomFactor = deltaY < 0 ? 1.09 : 0.92;
     this.camera.userZoom = Math.max(0.65, Math.min(1.8, this.camera.userZoom * zoomFactor));
+    this.reprojectMouse();
   }
 
   public setViewport(width: number, height: number): void {
     this.viewport.width = width;
     this.viewport.height = height;
+    this.reprojectMouse();
+  }
+
+  public setMouseCanvas(x: number, y: number): void {
+    if (!this.mouseCanvas) {
+      this.mouseCanvas = { x, y };
+    } else {
+      this.mouseCanvas.x = x;
+      this.mouseCanvas.y = y;
+    }
+    this.reprojectMouse();
+  }
+
+  public reprojectMouse(): void {
+    if (this.mouseCanvas) {
+      this.mouseWorld.x = (this.mouseCanvas.x - this.viewport.width / 2) / this.camera.zoom + this.camera.x;
+      this.mouseWorld.y = (this.mouseCanvas.y - this.viewport.height / 2) / this.camera.zoom + this.camera.y;
+    }
   }
 
   public start(playerName: string, skinId: string, playerId?: string): void {
@@ -265,6 +285,7 @@ export class GameEngine {
     this.particles = [];
     this.floatingTexts = [];
     this.killBanner = null;
+    this.mouseCanvas = null;
 
     const selectedSkin = SKINS.find((s) => s.id === skinId) || SKINS[0];
 
@@ -568,11 +589,13 @@ export class GameEngine {
       cancelAnimationFrame(this.animFrameId);
       this.animFrameId = null;
     }
+    this.mouseCanvas = null;
+    this.isMouseDown = false;
+    this.isSpaceDown = false;
     sound.setBoosting(false);
   }
 
   public syncRemotePeers(peers: Record<string, PlayerPresence>, myPlayerId?: string, myPeerId?: string): void {
-    const peerIds = new Set(Object.keys(peers));
     const now = Date.now();
 
     // 1. Remove disconnected or stale remote human snakes (no updates in > 3.5s)
@@ -669,6 +692,10 @@ export class GameEngine {
       this.stats.score = this.player.score;
       this.stats.length = this.player.body.length;
       this.stats.kills = this.player.kills;
+
+      // Continuously update mouseWorld from screen cursor position so steering tracks
+      // cursor direction seamlessly even when stationary or as camera moves
+      this.reprojectMouse();
 
       // Steering towards cursor in world coordinates
       const dx = this.mouseWorld.x - this.player.head.x;

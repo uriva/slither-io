@@ -14,6 +14,7 @@ export const SlitherGame: React.FC = () => {
   const engineRef = useRef<GameEngine | null>(null);
   const workerRef = useRef<Worker | null>(null);
   const lastPinchDistRef = useRef<number | null>(null);
+  const lastMouseClientRef = useRef<{ x: number; y: number } | null>(null);
 
   // Unique player ID per browser session/tab so multiple tabs see each other as distinct players
   const playerIdRef = useRef<string>(
@@ -262,42 +263,108 @@ export const SlitherGame: React.FC = () => {
     };
   }, [highScore]);
 
+  // Convert mouse/touch screen coordinates accurately to canvas world coordinates
+  const updateMousePosition = useCallback((clientX: number, clientY: number) => {
+    const engine = engineRef.current;
+    const canvas = canvasRef.current;
+    if (!engine || !canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+
+    // Convert CSS client coordinates to internal canvas buffer coordinates accurately,
+    // accounting for devicePixelRatio, canvas scaling, CSS width/height, and canvas offsets
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const canvasX = (clientX - rect.left) * scaleX;
+    const canvasY = (clientY - rect.top) * scaleY;
+
+    engine.setMouseCanvas(canvasX, canvasY);
+  }, []);
+
   // Window Resize & Viewport Sync
+  const handleResize = useCallback(() => {
+    const canvas = canvasRef.current;
+    const engine = engineRef.current;
+    if (!canvas || !engine) return;
+
+    // Clamp DPR to max 1.25 for crisp graphics with huge GPU performance gains
+    const dpr = Math.min(1.25, window.devicePixelRatio || 1);
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    canvas.style.width = `${w}px`;
+    canvas.style.height = `${h}px`;
+
+    // Get optimized, direct-to-screen hardware-accelerated 2D context
+    if (!ctxRef.current) {
+      ctxRef.current = canvas.getContext('2d', {
+        alpha: false,
+        desynchronized: true,
+      });
+    }
+
+    engine.setRenderContext(ctxRef.current);
+    engine.setViewport(canvas.width, canvas.height);
+
+    if (lastMouseClientRef.current) {
+      updateMousePosition(lastMouseClientRef.current.x, lastMouseClientRef.current.y);
+    }
+  }, [updateMousePosition]);
+
   useEffect(() => {
-    const handleResize = () => {
-      const canvas = canvasRef.current;
-      const engine = engineRef.current;
-      if (!canvas || !engine) return;
-
-      // Clamp DPR to max 1.25 for crisp graphics with huge GPU performance gains
-      const dpr = Math.min(1.25, window.devicePixelRatio || 1);
-      const w = window.innerWidth;
-      const h = window.innerHeight;
-
-      canvas.width = Math.round(w * dpr);
-      canvas.height = Math.round(h * dpr);
-      canvas.style.width = `${w}px`;
-      canvas.style.height = `${h}px`;
-
-      // Get optimized, direct-to-screen hardware-accelerated 2D context
-      if (!ctxRef.current) {
-        ctxRef.current = canvas.getContext('2d', {
-          alpha: false,
-          desynchronized: true,
-        });
-      }
-
-      engine.setRenderContext(ctxRef.current);
-      engine.setViewport(canvas.width, canvas.height);
-    };
-
     window.addEventListener('resize', handleResize);
     handleResize();
 
+    // Listen for display changes (e.g. dragging between laptop screen and external monitor)
+    let dprQuery: MediaQueryList | null = null;
+    const handleDprChange = () => {
+      handleResize();
+    };
+    try {
+      dprQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+      dprQuery.addEventListener('change', handleDprChange);
+    } catch {
+      // Fallback
+    }
+
     return () => {
       window.removeEventListener('resize', handleResize);
+      if (dprQuery) {
+        try {
+          dprQuery.removeEventListener('change', handleDprChange);
+        } catch {
+          // Fallback
+        }
+      }
     };
-  }, []);
+  }, [handleResize]);
+
+  // Global window pointer & mouse listeners so steering works across entire screen (even over HUD elements)
+  useEffect(() => {
+    const onWindowMouseMove = (e: MouseEvent) => {
+      lastMouseClientRef.current = { x: e.clientX, y: e.clientY };
+      if (gameState === 'playing') {
+        updateMousePosition(e.clientX, e.clientY);
+      }
+    };
+
+    const onWindowMouseUp = (e: MouseEvent) => {
+      if (e.button === 0 && engineRef.current) {
+        engineRef.current.isMouseDown = false;
+      }
+    };
+
+    window.addEventListener('mousemove', onWindowMouseMove, { passive: true });
+    window.addEventListener('mouseup', onWindowMouseUp);
+
+    return () => {
+      window.removeEventListener('mousemove', onWindowMouseMove);
+      window.removeEventListener('mouseup', onWindowMouseUp);
+    };
+  }, [gameState, updateMousePosition]);
 
   // Mouse Wheel Zoom In / Out Listener
   useEffect(() => {
@@ -314,20 +381,11 @@ export const SlitherGame: React.FC = () => {
     };
   }, [gameState]);
 
-  // Mouse Input handlers (zero object allocations & no getBoundingClientRect in hot loop)
+  // Mouse Input handlers
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    const engine = engineRef.current;
-    if (!engine) return;
-
-    const clientX = e.clientX;
-    const clientY = e.clientY;
-
-    const worldX = (clientX - engine.viewport.width / 2) / engine.camera.zoom + engine.camera.x;
-    const worldY = (clientY - engine.viewport.height / 2) / engine.camera.zoom + engine.camera.y;
-
-    engine.mouseWorld.x = worldX;
-    engine.mouseWorld.y = worldY;
-  }, []);
+    lastMouseClientRef.current = { x: e.clientX, y: e.clientY };
+    updateMousePosition(e.clientX, e.clientY);
+  }, [updateMousePosition]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button === 0 && engineRef.current) {
@@ -347,8 +405,12 @@ export const SlitherGame: React.FC = () => {
       const dx = e.touches[0].clientX - e.touches[1].clientX;
       const dy = e.touches[0].clientY - e.touches[1].clientY;
       lastPinchDistRef.current = Math.sqrt(dx * dx + dy * dy);
+    } else if (e.touches.length === 1) {
+      const touch = e.touches[0];
+      lastMouseClientRef.current = { x: touch.clientX, y: touch.clientY };
+      updateMousePosition(touch.clientX, touch.clientY);
     }
-  }, []);
+  }, [updateMousePosition]);
 
   const handleTouchMove = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
     const engine = engineRef.current;
@@ -365,15 +427,9 @@ export const SlitherGame: React.FC = () => {
     }
 
     const touch = e.touches[0];
-    const clientX = touch.clientX;
-    const clientY = touch.clientY;
-
-    const worldX = (clientX - engine.viewport.width / 2) / engine.camera.zoom + engine.camera.x;
-    const worldY = (clientY - engine.viewport.height / 2) / engine.camera.zoom + engine.camera.y;
-
-    engine.mouseWorld.x = worldX;
-    engine.mouseWorld.y = worldY;
-  }, []);
+    lastMouseClientRef.current = { x: touch.clientX, y: touch.clientY };
+    updateMousePosition(touch.clientX, touch.clientY);
+  }, [updateMousePosition]);
 
   const handleTouchEnd = useCallback(() => {
     lastPinchDistRef.current = null;
@@ -405,22 +461,11 @@ export const SlitherGame: React.FC = () => {
     const engine = engineRef.current;
     if (!engine) return;
 
-    const dpr = Math.min(1.25, window.devicePixelRatio || 1);
-    const w = window.innerWidth;
-    const h = window.innerHeight;
-    if (canvasRef.current) {
-      canvasRef.current.width = Math.round(w * dpr);
-      canvasRef.current.height = Math.round(h * dpr);
-      if (!ctxRef.current) {
-        ctxRef.current = canvasRef.current.getContext('2d', {
-          alpha: false,
-          desynchronized: true,
-        });
-      }
-    }
-    engine.setRenderContext(ctxRef.current);
-    engine.setViewport(canvasRef.current ? canvasRef.current.width : w, canvasRef.current ? canvasRef.current.height : h);
+    handleResize();
     engine.start(name, skinId, playerIdRef.current);
+    if (lastMouseClientRef.current) {
+      updateMousePosition(lastMouseClientRef.current.x, lastMouseClientRef.current.y);
+    }
     setGameState('playing');
   };
 
