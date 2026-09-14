@@ -120,108 +120,96 @@ class SoundSystem {
     }
   }
 
-  // Boost Initiation: Crisp upward aerodynamic surge & ignition chirp
+  // Boost Initiation: Authentic aerodynamic air whoosh (pure filtered wind rush, zero synth beeps)
   public playBoostStart(): void {
     if (this.isMuted || !this.ctx) return;
     try {
       const now = this.ctx.currentTime;
+      const duration = 0.24;
 
-      // 1. Upward energetic surge tone (triangle wave)
-      const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
-
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(130, now);
-      osc.frequency.exponentialRampToValueAtTime(340, now + 0.1);
-
-      gain.gain.setValueAtTime(this.volume * 0.26, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
-
-      osc.connect(gain);
-      gain.connect(this.ctx.destination);
-
-      osc.start(now);
-      osc.stop(now + 0.12);
-
-      // 2. Air burst puff (short bandpass noise burst)
-      const bufferSize = Math.floor(this.ctx.sampleRate * 0.09);
+      // Soft pink/brown noise buffer
+      const bufferSize = Math.floor(this.ctx.sampleRate * duration);
       const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
       const data = buffer.getChannelData(0);
+      let b0 = 0, b1 = 0, b2 = 0;
       for (let i = 0; i < bufferSize; i++) {
-        data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
+        const white = Math.random() * 2 - 1;
+        b0 = 0.99 * b0 + white * 0.05;
+        b1 = 0.95 * b1 + white * 0.11;
+        b2 = 0.85 * b2 + white * 0.25;
+        data[i] = (b0 + b1 + b2) * 1.8;
       }
 
       const noise = this.ctx.createBufferSource();
       noise.buffer = buffer;
 
-      const filter = this.ctx.createBiquadFilter();
-      filter.type = 'bandpass';
-      filter.frequency.setValueAtTime(450, now);
-      filter.frequency.exponentialRampToValueAtTime(950, now + 0.09);
-      filter.Q.setValueAtTime(2.2, now);
+      // Resonant bandpass sweep (rushing wind arc: 180Hz -> 950Hz -> 360Hz)
+      const bandpass = this.ctx.createBiquadFilter();
+      bandpass.type = 'bandpass';
+      bandpass.Q.setValueAtTime(1.8, now);
+      bandpass.frequency.setValueAtTime(180, now);
+      bandpass.frequency.exponentialRampToValueAtTime(950, now + 0.08);
+      bandpass.frequency.exponentialRampToValueAtTime(360, now + duration);
 
-      const noiseGain = this.ctx.createGain();
-      noiseGain.gain.setValueAtTime(this.volume * 0.2, now);
-      noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+      // Lowpass smoothing filter to keep it silky and natural
+      const lowpass = this.ctx.createBiquadFilter();
+      lowpass.type = 'lowpass';
+      lowpass.frequency.setValueAtTime(1400, now);
 
-      noise.connect(filter);
-      filter.connect(noiseGain);
-      noiseGain.connect(this.ctx.destination);
+      const gain = this.ctx.createGain();
+      // Natural whoosh swell and decay envelope
+      gain.gain.setValueAtTime(0.001, now);
+      gain.gain.linearRampToValueAtTime(this.volume * 0.42, now + 0.07);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+
+      noise.connect(bandpass);
+      bandpass.connect(lowpass);
+      lowpass.connect(gain);
+      gain.connect(this.ctx.destination);
 
       noise.start(now);
+      noise.stop(now + duration);
     } catch {
       // Ignore
     }
   }
 
-  // Boost Release: Soft pneumatic exhaust & gentle descending pitch drop
+  // Boost Release: Soft trailing wind exhalation / air decrescendo
   public playBoostEnd(): void {
     if (this.isMuted || !this.ctx) return;
     try {
       const now = this.ctx.currentTime;
+      const duration = 0.18;
 
-      // 1. Soft descending pitch drop
-      const osc = this.ctx.createOscillator();
-      const gain = this.ctx.createGain();
-
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(260, now);
-      osc.frequency.exponentialRampToValueAtTime(110, now + 0.09);
-
-      gain.gain.setValueAtTime(this.volume * 0.18, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
-
-      osc.connect(gain);
-      gain.connect(this.ctx.destination);
-
-      osc.start(now);
-      osc.stop(now + 0.1);
-
-      // 2. Soft air exhaust release
-      const bufferSize = Math.floor(this.ctx.sampleRate * 0.08);
+      const bufferSize = Math.floor(this.ctx.sampleRate * duration);
       const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
       const data = buffer.getChannelData(0);
+      let b0 = 0;
       for (let i = 0; i < bufferSize; i++) {
-        data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
+        const white = Math.random() * 2 - 1;
+        b0 = 0.92 * b0 + white * 0.08;
+        data[i] = b0 * 2.2;
       }
 
       const noise = this.ctx.createBufferSource();
       noise.buffer = buffer;
 
+      // Gentle downward wind trail (580Hz -> 140Hz)
       const filter = this.ctx.createBiquadFilter();
       filter.type = 'lowpass';
-      filter.frequency.setValueAtTime(550, now);
-      filter.frequency.exponentialRampToValueAtTime(160, now + 0.08);
+      filter.frequency.setValueAtTime(580, now);
+      filter.frequency.exponentialRampToValueAtTime(140, now + duration);
 
-      const noiseGain = this.ctx.createGain();
-      noiseGain.gain.setValueAtTime(this.volume * 0.15, now);
-      noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+      const gain = this.ctx.createGain();
+      gain.gain.setValueAtTime(this.volume * 0.28, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
 
       noise.connect(filter);
-      filter.connect(noiseGain);
-      noiseGain.connect(this.ctx.destination);
+      filter.connect(gain);
+      gain.connect(this.ctx.destination);
 
       noise.start(now);
+      noise.stop(now + duration);
     } catch {
       // Ignore
     }

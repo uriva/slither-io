@@ -270,7 +270,7 @@ export class GameEngine {
     );
 
     this.stats = {
-      score: 10,
+      score: 55,
       length: INITIAL_SNAKE_LENGTH,
       kills: 0,
       timeAlive: 0,
@@ -419,7 +419,7 @@ export class GameEngine {
       body,
       targetLength: initialLength,
       radius: BASE_RADIUS,
-      score: initialLength * 2,
+      score: isPlayer ? 55 : Math.max(35, initialLength * 2),
       kills: 0,
       isDead: false,
       boostFuel: 0,
@@ -694,9 +694,9 @@ export class GameEngine {
         snake.isBoosting = false;
       } else {
         snake.boostFuel += 1;
-        if (snake.boostFuel >= 4) {
+        if (snake.boostFuel >= 5) {
           snake.boostFuel = 0;
-          snake.score = Math.max(MIN_BOOST_MASS, snake.score - 1.2);
+          snake.score = Math.max(MIN_BOOST_MASS, snake.score - 0.7);
 
           // Spawn dropped mass orb from tail matching snake skin colors!
           const tail = snake.body[snake.body.length - 1];
