@@ -260,8 +260,19 @@ export class GameEngine {
 
   public handleWheel(deltaY: number): void {
     const zoomFactor = deltaY < 0 ? 1.09 : 0.92;
-    this.camera.userZoom = Math.max(0.65, Math.min(1.8, this.camera.userZoom * zoomFactor));
+    this.camera.userZoom = Math.max(0.45, Math.min(2.0, this.camera.userZoom * zoomFactor));
     this.reprojectMouse();
+  }
+
+  public panCamera(dx: number, dy: number): void {
+    this.camera.x -= dx / this.camera.zoom;
+    this.camera.y -= dy / this.camera.zoom;
+    const dist = Math.hypot(this.camera.x, this.camera.y);
+    const maxDist = ARENA_RADIUS - 100;
+    if (dist > maxDist) {
+      this.camera.x = (this.camera.x / dist) * maxDist;
+      this.camera.y = (this.camera.y / dist) * maxDist;
+    }
   }
 
   public setViewport(width: number, height: number): void {
@@ -572,10 +583,18 @@ export class GameEngine {
   }
 
   private initBots(): void {
+    // Purge dead bot snakes so active bot count replenishes properly
+    for (let i = this.snakes.length - 1; i >= 0; i--) {
+      const s = this.snakes[i];
+      if (!s.isPlayer && !s.isRemoteHuman && s.isDead) {
+        this.snakes.splice(i, 1);
+      }
+    }
+
     const targetBots = BOT_COUNT;
     let currentBots = 0;
     for (let i = 0; i < this.snakes.length; i++) {
-      if (!this.snakes[i].isPlayer) currentBots++;
+      if (!this.snakes[i].isPlayer && !this.snakes[i].isDead) currentBots++;
     }
 
     for (let i = currentBots; i < targetBots; i++) {
@@ -620,7 +639,7 @@ export class GameEngine {
 
     this.update(dt);
 
-    if (this.renderCtx && !this.isGameOver) {
+    if (this.renderCtx) {
       this.render(this.renderCtx);
     }
 
@@ -629,11 +648,7 @@ export class GameEngine {
       this.onStateUpdate(this);
     }
 
-    if (!this.isGameOver) {
-      this.animFrameId = requestAnimationFrame(this.loop);
-    } else {
-      this.animFrameId = null;
-    }
+    this.animFrameId = requestAnimationFrame(this.loop);
   };
 
   public stop(): void {
@@ -879,8 +894,10 @@ export class GameEngine {
       // Base zoom scales with mass, userZoom modifies it via mouse wheel
       this.camera.baseZoom = Math.max(0.38, 1.0 / (1.0 + (this.player.radius - BASE_RADIUS) * 0.024));
       this.camera.targetZoom = this.camera.baseZoom * this.camera.userZoom;
-      this.camera.zoom += (this.camera.targetZoom - this.camera.zoom) * 0.1;
+    } else {
+      this.camera.targetZoom = this.camera.baseZoom * this.camera.userZoom;
     }
+    this.camera.zoom += (this.camera.targetZoom - this.camera.zoom) * 0.1;
   }
 
   private rebuildBodyGrid(): void {
@@ -1318,7 +1335,13 @@ export class GameEngine {
       this.isGameOver = true;
       this.stats.killerName = killerName;
       sound.playDeath();
-      this.stop(); // Stop game loop immediately so animation frames don't multiply on respawn
+      sound.setBoosting(false);
+      this.isMouseDown = false;
+      this.isSpaceDown = false;
+      this.isShiftDown = false;
+      this.resetKeyboardKeys();
+      // Smoothly widen camera perspective slightly for dramatic spectator view of the aftermath
+      this.camera.baseZoom = Math.max(0.52, this.camera.baseZoom * 0.85);
       if (this.onGameOverCallback) {
         this.onGameOverCallback(this.stats);
       }
@@ -1659,20 +1682,45 @@ export class GameEngine {
 
     ctx.save();
 
-    // 1. If Boosting: Draw single smooth continuous glow aura behind snake (1 fast draw call)
-    if (snake.isBoosting) {
+    // 1. If Boosting / Accelerating: Draw multi-layer pulsating glow aura
+    const speedRatio = Math.max(0, Math.min(1, (snake.speed - snake.baseSpeed) / (snake.boostSpeed - snake.baseSpeed)));
+    const boostIntensity = snake.isBoosting ? Math.max(0.7, speedRatio) : speedRatio;
+
+    if (boostIntensity > 0.08) {
+      const pulseSpeed = 0.32;
+      const hash = (snake.id.charCodeAt(0) || 0) * 0.7;
+      const pulse = 0.5 + 0.5 * Math.sin(this.gameTime * pulseSpeed + hash);
+      const harmonicPulse = 0.5 + 0.5 * Math.sin(this.gameTime * pulseSpeed * 2.1 + hash);
+
+      ctx.save();
       ctx.beginPath();
       ctx.moveTo(snake.body[0].x, snake.body[0].y);
       for (let i = 1; i < bodyLen; i += 2) {
         ctx.lineTo(snake.body[i].x, snake.body[i].y);
       }
-      ctx.lineWidth = snake.radius * 2.8;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
-      ctx.strokeStyle = skin.particleColor;
-      ctx.globalAlpha = 0.35;
+
+      // 1a. Outer expansive pulsating glow aura
+      ctx.lineWidth = snake.radius * (2.6 + pulse * 1.3) * boostIntensity;
+      ctx.strokeStyle = skin.glowColor || skin.particleColor;
+      ctx.globalAlpha = (0.2 + pulse * 0.25) * boostIntensity;
       ctx.stroke();
-      ctx.globalAlpha = 1.0;
+
+      // 1b. Inner radiant high-energy corona
+      ctx.lineWidth = snake.radius * (2.0 + harmonicPulse * 0.5) * boostIntensity;
+      ctx.strokeStyle = skin.particleColor;
+      ctx.globalAlpha = (0.35 + pulse * 0.3) * boostIntensity;
+      ctx.stroke();
+
+      // 1c. Head leading energy halo
+      ctx.beginPath();
+      ctx.arc(head.x, head.y, snake.radius * (1.3 + pulse * 0.45) * boostIntensity, 0, Math.PI * 2);
+      ctx.fillStyle = skin.particleColor;
+      ctx.globalAlpha = (0.28 + pulse * 0.32) * boostIntensity;
+      ctx.fill();
+
+      ctx.restore();
     }
 
     const isZoomedOut = this.camera.zoom < 0.68;

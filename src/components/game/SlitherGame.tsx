@@ -7,6 +7,7 @@ import { sound } from '@/game/audio';
 import { StartScreen } from './StartScreen';
 import { GameHUD } from './GameHUD';
 import { GameOverModal } from './GameOverModal';
+import { Minimap } from './Minimap';
 import { db, getArenaRoom, SECTORS, MAX_PLAYERS_PER_ROOM } from '@/lib/instant';
 
 function getStoredPlayerId(): string {
@@ -29,6 +30,9 @@ export const SlitherGame: React.FC = () => {
   const workerRef = useRef<Worker | null>(null);
   const lastPinchDistRef = useRef<number | null>(null);
   const lastMouseClientRef = useRef<{ x: number; y: number } | null>(null);
+  const isPanningRef = useRef(false);
+  const [isPanning, setIsPanning] = useState(false);
+  const lastPanPosRef = useRef<{ x: number; y: number } | null>(null);
 
   // Unique player ID per browser session/tab so multiple tabs see each other as distinct players
   const [playerId] = useState(getStoredPlayerId);
@@ -413,12 +417,24 @@ export const SlitherGame: React.FC = () => {
       lastMouseClientRef.current = { x: e.clientX, y: e.clientY };
       if (gameState === 'playing') {
         updateMousePosition(e.clientX, e.clientY);
+      } else if (gameState === 'gameover' && isPanningRef.current && engineRef.current) {
+        if (lastPanPosRef.current) {
+          const dx = e.clientX - lastPanPosRef.current.x;
+          const dy = e.clientY - lastPanPosRef.current.y;
+          engineRef.current.panCamera(dx, dy);
+        }
+        lastPanPosRef.current = { x: e.clientX, y: e.clientY };
       }
     };
 
     const onWindowMouseUp = (e: MouseEvent) => {
-      if (e.button === 0 && engineRef.current) {
-        engineRef.current.isMouseDown = false;
+      if (e.button === 0) {
+        if (engineRef.current) {
+          engineRef.current.isMouseDown = false;
+        }
+        isPanningRef.current = false;
+        setIsPanning(false);
+        lastPanPosRef.current = null;
       }
     };
 
@@ -434,7 +450,7 @@ export const SlitherGame: React.FC = () => {
   // Mouse Wheel Zoom In / Out Listener
   useEffect(() => {
     const handleWheelEvent = (e: WheelEvent) => {
-      if (gameState === 'playing' && engineRef.current) {
+      if ((gameState === 'playing' || gameState === 'gameover') && engineRef.current) {
         e.preventDefault();
         engineRef.current.handleWheel(e.deltaY);
       }
@@ -449,18 +465,31 @@ export const SlitherGame: React.FC = () => {
   // Mouse Input handlers
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     lastMouseClientRef.current = { x: e.clientX, y: e.clientY };
-    updateMousePosition(e.clientX, e.clientY);
-  }, [updateMousePosition]);
+    if (gameState === 'playing') {
+      updateMousePosition(e.clientX, e.clientY);
+    }
+  }, [gameState, updateMousePosition]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if (e.button === 0 && engineRef.current) {
-      engineRef.current.isMouseDown = true;
+    if (e.button === 0) {
+      if (gameState === 'playing' && engineRef.current) {
+        engineRef.current.isMouseDown = true;
+      } else if (gameState === 'gameover') {
+        isPanningRef.current = true;
+        setIsPanning(true);
+        lastPanPosRef.current = { x: e.clientX, y: e.clientY };
+      }
     }
-  }, []);
+  }, [gameState]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
-    if (e.button === 0 && engineRef.current) {
-      engineRef.current.isMouseDown = false;
+    if (e.button === 0) {
+      if (engineRef.current) {
+        engineRef.current.isMouseDown = false;
+      }
+      isPanningRef.current = false;
+      setIsPanning(false);
+      lastPanPosRef.current = null;
     }
   }, []);
 
@@ -473,9 +502,13 @@ export const SlitherGame: React.FC = () => {
     } else if (e.touches.length === 1) {
       const touch = e.touches[0];
       lastMouseClientRef.current = { x: touch.clientX, y: touch.clientY };
-      updateMousePosition(touch.clientX, touch.clientY);
+      if (gameState === 'playing') {
+        updateMousePosition(touch.clientX, touch.clientY);
+      } else if (gameState === 'gameover') {
+        lastPanPosRef.current = { x: touch.clientX, y: touch.clientY };
+      }
     }
-  }, [updateMousePosition]);
+  }, [gameState, updateMousePosition]);
 
   const handleTouchMove = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
     const engine = engineRef.current;
@@ -492,12 +525,20 @@ export const SlitherGame: React.FC = () => {
     }
 
     const touch = e.touches[0];
-    lastMouseClientRef.current = { x: touch.clientX, y: touch.clientY };
-    updateMousePosition(touch.clientX, touch.clientY);
-  }, [updateMousePosition]);
+    if (gameState === 'playing') {
+      lastMouseClientRef.current = { x: touch.clientX, y: touch.clientY };
+      updateMousePosition(touch.clientX, touch.clientY);
+    } else if (gameState === 'gameover' && lastPanPosRef.current) {
+      const dx = touch.clientX - lastPanPosRef.current.x;
+      const dy = touch.clientY - lastPanPosRef.current.y;
+      engine.panCamera(dx, dy);
+      lastPanPosRef.current = { x: touch.clientX, y: touch.clientY };
+    }
+  }, [gameState, updateMousePosition]);
 
   const handleTouchEnd = useCallback(() => {
     lastPinchDistRef.current = null;
+    lastPanPosRef.current = null;
   }, []);
 
   // Keyboard handlers (Arrow keys / WASD steering, Space/Shift to boost, Enter for chat, C to toggle mode)
@@ -528,17 +569,17 @@ export const SlitherGame: React.FC = () => {
       }
 
       // Boosting with Space or Shift
-      if (code === 'Space') {
+      if (code === 'Space' && gameState === 'playing') {
         if (engineRef.current) engineRef.current.isSpaceDown = true;
         return;
       }
-      if (code === 'ShiftLeft' || code === 'ShiftRight') {
+      if ((code === 'ShiftLeft' || code === 'ShiftRight') && gameState === 'playing') {
         if (engineRef.current) engineRef.current.isShiftDown = true;
         return;
       }
 
       // Arrow keys and WASD steering (Classic Slither: Up/W boosts, Left/Right steers, Down is ignored)
-      if (code === 'ArrowUp' || code === 'KeyW') {
+      if ((code === 'ArrowUp' || code === 'KeyW') && gameState === 'playing') {
         engineRef.current?.setKeyboardKey('up', true);
         return;
       }
@@ -546,21 +587,21 @@ export const SlitherGame: React.FC = () => {
         // Classic mode: down does nothing (prevents scrolling)
         return;
       }
-      if (code === 'ArrowLeft' || code === 'KeyA') {
+      if ((code === 'ArrowLeft' || code === 'KeyA') && gameState === 'playing') {
         engineRef.current?.setKeyboardKey('left', true);
         return;
       }
-      if (code === 'ArrowRight' || code === 'KeyD') {
+      if ((code === 'ArrowRight' || code === 'KeyD') && gameState === 'playing') {
         engineRef.current?.setKeyboardKey('right', true);
         return;
       }
 
       // Zoom keys: '+' / '=' to zoom in, '-' / '_' to zoom out
-      if ((code === 'Equal' || code === 'NumpadAdd') && gameState === 'playing') {
+      if ((code === 'Equal' || code === 'NumpadAdd') && (gameState === 'playing' || gameState === 'gameover')) {
         engineRef.current?.handleWheel(-100);
         return;
       }
-      if ((code === 'Minus' || code === 'NumpadSubtract') && gameState === 'playing') {
+      if ((code === 'Minus' || code === 'NumpadSubtract') && (gameState === 'playing' || gameState === 'gameover')) {
         engineRef.current?.handleWheel(100);
         return;
       }
@@ -672,7 +713,13 @@ export const SlitherGame: React.FC = () => {
         }}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
-        className="block w-full h-full cursor-crosshair touch-none"
+        className={`block w-full h-full touch-none ${
+          gameState === 'gameover'
+            ? isPanning
+              ? 'cursor-grabbing'
+              : 'cursor-grab'
+            : 'cursor-crosshair'
+        }`}
       />
 
       {/* Start Screen */}
@@ -711,6 +758,15 @@ export const SlitherGame: React.FC = () => {
           }}
           isTouchDevice={isTouchDevice}
         />
+      )}
+
+      {/* Radar Minimap during Game Over / Spectator Mode */}
+      {/* eslint-disable-next-line react-hooks/refs */}
+      {gameState === 'gameover' && engineRef.current && (
+        <div className="hidden sm:block absolute bottom-6 right-6 z-30 pointer-events-auto animate-in fade-in duration-300">
+          {/* eslint-disable-next-line react-hooks/refs */}
+          <Minimap engine={engineRef.current} />
+        </div>
       )}
 
       {/* Game Over Modal */}
