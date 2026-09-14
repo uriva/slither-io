@@ -10,6 +10,7 @@ export interface Segment {
   radius: number;
   snakeId?: string;
   segmentIndex?: number;
+  ownerSnake?: Snake;
 }
 
 export interface SnakeSkin {
@@ -30,6 +31,7 @@ export interface Snake {
   isRemoteHuman?: boolean;
   skin: SnakeSkin;
   head: Point;
+  prevHead?: Point;
   angle: number;
   targetAngle: number;
   speed: number;

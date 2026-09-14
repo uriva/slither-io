@@ -34,6 +34,7 @@ import { sound } from './audio';
 interface BodySegmentItem extends GridItem {
   snakeId?: string;
   segmentIndex?: number;
+  ownerSnake?: Snake;
 }
 
 export class GameEngine {
@@ -267,11 +268,23 @@ export class GameEngine {
 
     const selectedSkin = SKINS.find((s) => s.id === skinId) || SKINS[0];
 
-    // Create player snake near center
-    const playerStartAngle = Math.random() * Math.PI * 2;
-    const startDist = Math.random() * 500;
-    const px = Math.cos(playerStartAngle) * startDist;
-    const py = Math.sin(playerStartAngle) * startDist;
+    // Spawn player at a random position within the arena
+    const spawnRadius = ARENA_RADIUS - 1200;
+    let px = 0;
+    let py = 0;
+    let attempts = 0;
+    do {
+      const playerDist = Math.sqrt(Math.random()) * spawnRadius;
+      const playerAngle = Math.random() * Math.PI * 2;
+      px = Math.cos(playerAngle) * playerDist;
+      py = Math.sin(playerAngle) * playerDist;
+      attempts++;
+    } while (
+      attempts < 15 &&
+      this.snakes.some(
+        (s) => !s.isDead && (s.head.x - px) ** 2 + (s.head.y - py) ** 2 < 640000
+      )
+    );
 
     const uniqueId = playerId || `user-${Math.random().toString(36).substring(2, 9)}`;
 
@@ -283,6 +296,9 @@ export class GameEngine {
       px,
       py
     );
+
+    this.mouseWorld.x = px + Math.cos(this.player.angle) * 300;
+    this.mouseWorld.y = py + Math.sin(this.player.angle) * 300;
 
     this.stats = {
       score: 55,
@@ -304,6 +320,7 @@ export class GameEngine {
     // Populate bot snakes
     this.snakes = [this.player];
     this.initBots();
+    this.rebuildBodyGrid();
 
     this.lastFrameTime = performance.now();
     this.animFrameId = requestAnimationFrame(this.loop);
@@ -429,9 +446,20 @@ export class GameEngine {
     skin: SnakeSkin,
     x: number,
     y: number,
-    initialLength: number = INITIAL_SNAKE_LENGTH
+    initialLength: number = INITIAL_SNAKE_LENGTH,
+    initialAngle?: number
   ): Snake {
-    const angle = Math.random() * Math.PI * 2;
+    let angle = initialAngle;
+    if (angle === undefined) {
+      const distFromCenter = Math.hypot(x, y);
+      if (distFromCenter > ARENA_RADIUS - 2000) {
+        // Face inward toward arena center with natural variance (±45 deg)
+        const inwardAngle = Math.atan2(-y, -x);
+        angle = inwardAngle + (Math.random() - 0.5) * (Math.PI * 0.5);
+      } else {
+        angle = Math.random() * Math.PI * 2;
+      }
+    }
     const body: { x: number; y: number; radius: number }[] = [];
 
     for (let i = 0; i < initialLength; i++) {
@@ -448,6 +476,7 @@ export class GameEngine {
       isPlayer,
       skin,
       head: { x, y },
+      prevHead: { x, y },
       angle,
       targetAngle: angle,
       speed: BASE_SPEED,
@@ -486,7 +515,7 @@ export class GameEngine {
 
       // Safe spawn distance from player
       do {
-        const r = 900 + Math.sqrt(Math.random()) * (ARENA_RADIUS - 1400);
+        const r = Math.sqrt(Math.random()) * (ARENA_RADIUS - 1200);
         const theta = Math.random() * Math.PI * 2;
         bx = Math.cos(theta) * r;
         by = Math.sin(theta) * r;
@@ -605,7 +634,8 @@ export class GameEngine {
           skin,
           peer.head.x,
           peer.head.y,
-          INITIAL_SNAKE_LENGTH
+          INITIAL_SNAKE_LENGTH,
+          peer.angle
         );
         remoteSnake.isRemoteHuman = true;
         remoteSnake.spawnTimestamp = peer.spawnTimestamp || Date.now();
@@ -653,23 +683,6 @@ export class GameEngine {
       sound.setBoosting(wantsBoost);
     }
 
-    // Build Body Spatial Grid (zero object allocations)
-    this.bodyGrid.clear();
-    for (let s = 0; s < this.snakes.length; s++) {
-      const snake = this.snakes[s];
-      if (snake.isDead) continue;
-      const body = snake.body;
-      const bodyLen = body.length;
-      // Include neck (i = 1) so wider snakes physically shield their head in head-on collisions
-      for (let i = 1; i < bodyLen; i++) {
-        const seg = body[i];
-        seg.id = i;
-        seg.snakeId = snake.id;
-        seg.segmentIndex = i;
-        this.bodyGrid.insert(seg as BodySegmentItem);
-      }
-    }
-
     // Update Bot AI
     for (let i = 0; i < this.snakes.length; i++) {
       const snake = this.snakes[i];
@@ -685,7 +698,10 @@ export class GameEngine {
       this.updateSnakePhysics(snake);
     }
 
-    // Check Collisions
+    // Rebuild Body Spatial Grid with fresh post-physics positions
+    this.rebuildBodyGrid();
+
+    // Check Collisions with up-to-date spatial grid
     this.checkCollisions();
 
     // Update Orbs & Prey
@@ -729,6 +745,24 @@ export class GameEngine {
       this.camera.baseZoom = Math.max(0.38, 1.0 / (1.0 + (this.player.radius - BASE_RADIUS) * 0.024));
       this.camera.targetZoom = this.camera.baseZoom * this.camera.userZoom;
       this.camera.zoom += (this.camera.targetZoom - this.camera.zoom) * 0.1;
+    }
+  }
+
+  private rebuildBodyGrid(): void {
+    this.bodyGrid.clear();
+    for (let s = 0; s < this.snakes.length; s++) {
+      const snake = this.snakes[s];
+      if (snake.isDead) continue;
+      const body = snake.body;
+      const bodyLen = body.length;
+      for (let i = 1; i < bodyLen; i++) {
+        const seg = body[i] as unknown as BodySegmentItem;
+        seg.id = i;
+        seg.snakeId = snake.id;
+        seg.segmentIndex = i;
+        seg.ownerSnake = snake;
+        this.bodyGrid.insert(seg);
+      }
     }
   }
 
@@ -781,6 +815,14 @@ export class GameEngine {
           }
         }
       }
+    }
+
+    // Track previous head position for continuous swept collision
+    if (!snake.prevHead) {
+      snake.prevHead = { x: snake.head.x, y: snake.head.y };
+    } else {
+      snake.prevHead.x = snake.head.x;
+      snake.prevHead.y = snake.head.y;
     }
 
     // 3. Move Head Forward
@@ -968,47 +1010,106 @@ export class GameEngine {
 
       if (snake.isDead) continue;
 
-      // 3. Head-to-Body Collision with other snakes (authentic forgiving Slither.io inner core physics)
+      // 3. Head-to-Body Collision with other snakes (airtight continuous capsule physics)
       this.bodyQueryList.length = 0;
-      this.bodyGrid.queryInto(hx, hy, snake.radius * 1.8, this.bodyQueryList);
+      const queryRange = snake.radius + MAX_RADIUS + 15;
+      this.bodyGrid.queryInto(hx, hy, queryRange, this.bodyQueryList);
 
       const cosAngle = Math.cos(snake.angle);
       const sinAngle = Math.sin(snake.angle);
+      const prevHx = snake.prevHead ? snake.prevHead.x : hx;
+      const prevHy = snake.prevHead ? snake.prevHead.y : hy;
 
       for (let i = 0; i < this.bodyQueryList.length; i++) {
-        const seg = this.bodyQueryList[i];
+        const seg = this.bodyQueryList[i] as unknown as BodySegmentItem;
         if (seg.snakeId === snake.id) continue; // Cannot hit own body!
 
-        const dsx = hx - seg.x;
-        const dsy = hy - seg.y;
+        const killer = seg.ownerSnake || this.snakes.find((s) => s.id === seg.snakeId);
+        // Don't collide with shielded spawning snakes
+        if (!killer || killer.isDead || killer.invulnerableTimer > 0) continue;
 
-        // Slither.io Inner Core Hitbox:
-        // Visual head is ~1.15r, visual body is 1.0r.
-        // True core collision radius is 0.65r + 0.60r so grazing/sliding along flanks doesn't trigger death!
-        let headCoreR = snake.radius * 0.65;
-        let segCoreR = seg.radius * 0.60;
+        const segIdx = seg.segmentIndex !== undefined ? seg.segmentIndex : -1;
+        const prevSeg = (segIdx >= 1 && killer.body && killer.body[segIdx - 1]) ? killer.body[segIdx - 1] : null;
 
-        // Taper neck segments near opponent head so near-head coiling isn't prematurely clipped
-        if (seg.segmentIndex !== undefined && seg.segmentIndex <= 2) {
-          segCoreR *= 0.75;
+        let hasCollided = false;
+
+        // A. Continuous Swept Line Intersection:
+        // Test whether the head trajectory from (prevHx, prevHy) to (hx, hy) crossed the segment centerline
+        if (prevSeg) {
+          const p1x = prevHx, p1y = prevHy;
+          const p2x = hx, p2y = hy;
+          const p3x = prevSeg.x, p3y = prevSeg.y;
+          const p4x = seg.x, p4y = seg.y;
+
+          const d1 = (p4x - p3x) * (p1y - p3y) - (p4y - p3y) * (p1x - p3x);
+          const d2 = (p4x - p3x) * (p2y - p3y) - (p4y - p3y) * (p2x - p3x);
+          const d3 = (p2x - p1x) * (p3y - p1y) - (p2y - p1y) * (p3x - p1x);
+          const d4 = (p2x - p1x) * (p4y - p1y) - (p2y - p1y) * (p4x - p1x);
+
+          if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+              ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
+            hasCollided = true;
+          }
         }
 
-        // Glancing / Tangent Circling Forgiveness:
-        // If the snake is moving away or parallel to the segment (circling or skimming alongside),
-        // grant an extra 10% forgiving clearance margin.
-        const approachDot = -(dsx * cosAngle + dsy * sinAngle);
-        if (approachDot <= 0) {
-          headCoreR *= 0.90;
-          segCoreR *= 0.90;
+        // B. Capsule Distance Test:
+        // Test whether the head circle penetrates the solid capsule between prevSeg and seg
+        if (!hasCollided) {
+          let closestX = seg.x;
+          let closestY = seg.y;
+          let segRadius = seg.radius;
+
+          if (prevSeg) {
+            const abx = seg.x - prevSeg.x;
+            const aby = seg.y - prevSeg.y;
+            const apx = hx - prevSeg.x;
+            const apy = hy - prevSeg.y;
+            const abLenSq = abx * abx + aby * aby;
+            if (abLenSq > 0) {
+              const t = Math.max(0, Math.min(1, (apx * abx + apy * aby) / abLenSq));
+              closestX = prevSeg.x + t * abx;
+              closestY = prevSeg.y + t * aby;
+              segRadius = prevSeg.radius * (1 - t) + seg.radius * t;
+            }
+          }
+
+          const dsx = hx - closestX;
+          const dsy = hy - closestY;
+          const distSq = dsx * dsx + dsy * dsy;
+
+          // Slither.io Inner Core Hitbox:
+          // Visual head is ~1.15r, visual body is ~0.95r.
+          // True core collision radius is 0.70r + 0.65r
+          let headCoreR = snake.radius * 0.70;
+          let segCoreR = segRadius * 0.65;
+
+          // Glancing / Tangent Circling Forgiveness:
+          // If the snake is moving away or parallel to the segment (circling or skimming alongside),
+          // grant an extra clearance margin.
+          const approachDot = -(dsx * cosAngle + dsy * sinAngle);
+          if (approachDot <= 0) {
+            headCoreR *= 0.88;
+            segCoreR *= 0.88;
+          }
+
+          const maxDist = headCoreR + segCoreR;
+          if (distSq < maxDist * maxDist) {
+            hasCollided = true;
+          }
+
+          // Midpoint check when boosting to prevent high-speed tunneling
+          if (!hasCollided && snake.isBoosting) {
+            const midHx = (prevHx + hx) * 0.5;
+            const midHy = (prevHy + hy) * 0.5;
+            const mdsx = midHx - closestX;
+            const mdsy = midHy - closestY;
+            if (mdsx * mdsx + mdsy * mdsy < maxDist * maxDist) {
+              hasCollided = true;
+            }
+          }
         }
 
-        const maxDist = headCoreR + segCoreR;
-
-        if (dsx * dsx + dsy * dsy < maxDist * maxDist) {
-          const killer = this.snakes.find((s) => s.id === seg.snakeId);
-          // Don't collide with shielded spawning snakes
-          if (killer && killer.invulnerableTimer > 0) continue;
-
+        if (hasCollided) {
           this.killSnake(snake, killer ? killer.name : 'Unknown');
           if (killer && !killer.isDead) {
             killer.kills += 1;

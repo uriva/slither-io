@@ -63,10 +63,11 @@ export class SpatialGrid<T extends GridItem> {
   }
 
   public hasObstacle(x: number, y: number, range: number, excludeSnakeId: string): boolean {
-    const minCx = Math.floor((x - range) / this.cellSize);
-    const maxCx = Math.floor((x + range) / this.cellSize);
-    const minCy = Math.floor((y - range) / this.cellSize);
-    const maxCy = Math.floor((y + range) / this.cellSize);
+    const searchDist = range + 45;
+    const minCx = Math.floor((x - searchDist) / this.cellSize);
+    const maxCx = Math.floor((x + searchDist) / this.cellSize);
+    const minCy = Math.floor((y - searchDist) / this.cellSize);
+    const maxCy = Math.floor((y + searchDist) / this.cellSize);
 
     for (let cx = minCx; cx <= maxCx; cx++) {
       for (let cy = minCy; cy <= maxCy; cy++) {
@@ -98,10 +99,11 @@ export class SpatialGrid<T extends GridItem> {
   }
 
   public queryInto(x: number, y: number, range: number, outResults: T[]): void {
-    const minCx = Math.floor((x - range) / this.cellSize);
-    const maxCx = Math.floor((x + range) / this.cellSize);
-    const minCy = Math.floor((y - range) / this.cellSize);
-    const maxCy = Math.floor((y + range) / this.cellSize);
+    const searchDist = range + 45;
+    const minCx = Math.floor((x - searchDist) / this.cellSize);
+    const maxCx = Math.floor((x + searchDist) / this.cellSize);
+    const minCy = Math.floor((y - searchDist) / this.cellSize);
+    const maxCy = Math.floor((y + searchDist) / this.cellSize);
 
     for (let cx = minCx; cx <= maxCx; cx++) {
       for (let cy = minCy; cy <= maxCy; cy++) {
@@ -124,10 +126,11 @@ export class SpatialGrid<T extends GridItem> {
   }
 
   public queryRectInto(left: number, right: number, top: number, bottom: number, outResults: T[]): void {
-    const minCx = Math.floor(left / this.cellSize);
-    const maxCx = Math.floor(right / this.cellSize);
-    const minCy = Math.floor(top / this.cellSize);
-    const maxCy = Math.floor(bottom / this.cellSize);
+    const searchMargin = 45;
+    const minCx = Math.floor((left - searchMargin) / this.cellSize);
+    const maxCx = Math.floor((right + searchMargin) / this.cellSize);
+    const minCy = Math.floor((top - searchMargin) / this.cellSize);
+    const maxCy = Math.floor((bottom + searchMargin) / this.cellSize);
 
     for (let cx = minCx; cx <= maxCx; cx++) {
       for (let cy = minCy; cy <= maxCy; cy++) {
