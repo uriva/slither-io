@@ -8,7 +8,6 @@ import {
   Point,
   SnakeSkin,
   PlayerPresence,
-  ControlMode,
   KeyboardState,
 } from './types';
 import {
@@ -20,7 +19,6 @@ import {
   BASE_SPEED,
   BOOST_SPEED,
   TURN_SPEED,
-  BOOST_TURN_SPEED,
   MIN_BOOST_MASS,
   INITIAL_FOOD_COUNT,
   PREY_COUNT,
@@ -99,6 +97,7 @@ export class GameEngine {
   // Input states
   public mouseWorld: Point = { x: 0, y: 0 };
   public mouseCanvas: Point | null = null;
+  public lastReportedMouseCanvas: Point | null = null;
   public isMouseDown: boolean = false;
   public isSpaceDown: boolean = false;
   public isShiftDown: boolean = false;
@@ -108,7 +107,6 @@ export class GameEngine {
     left: false,
     right: false,
   };
-  public controlMode: ControlMode = 'directional';
   public lastInputSource: 'mouse' | 'keyboard' = 'mouse';
 
   public onGameOverCallback?: (stats: GameStats) => void;
@@ -272,23 +270,14 @@ export class GameEngine {
   }
 
   public isKeyboardActive(): boolean {
-    return (
-      this.keyboardKeys.up ||
-      this.keyboardKeys.down ||
-      this.keyboardKeys.left ||
-      this.keyboardKeys.right
-    );
+    return this.keyboardKeys.left || this.keyboardKeys.right;
   }
 
   public setKeyboardKey(key: keyof KeyboardState, pressed: boolean): void {
     this.keyboardKeys[key] = pressed;
-    if (pressed) {
+    if (pressed && (key === 'left' || key === 'right')) {
       this.lastInputSource = 'keyboard';
     }
-  }
-
-  public setControlMode(mode: ControlMode): void {
-    this.controlMode = mode;
   }
 
   public resetKeyboardKeys(): void {
@@ -300,15 +289,36 @@ export class GameEngine {
     this.isShiftDown = false;
   }
 
+  public getSnakeTurnSpeed(snake: Snake): number {
+    // Authentic Slither.io turn speed: base 0.038 rad/frame at 60fps
+    const baseTurnSpeed = TURN_SPEED;
+    // Scale calculation: larger snakes turn in wider arcs
+    const sc = Math.min(6, 1 + Math.max(0, snake.radius - BASE_RADIUS) / 5.5);
+    // Authentic Slither.io scang formula:
+    const scang = 0.13 + 0.87 * Math.pow((7 - sc) / 6, 2);
+    return baseTurnSpeed * scang;
+  }
+
   public setMouseCanvas(x: number, y: number): void {
     if (!this.mouseCanvas) {
       this.mouseCanvas = { x, y };
+      this.lastReportedMouseCanvas = { x, y };
     } else {
+      // Check if mouse actually moved (threshold: >3px) so keyboard steering isn't broken
+      // by resting mouse jitter
+      if (this.lastReportedMouseCanvas) {
+        const dx = x - this.lastReportedMouseCanvas.x;
+        const dy = y - this.lastReportedMouseCanvas.y;
+        if (dx * dx + dy * dy > 9) {
+          this.lastInputSource = 'mouse';
+          this.lastReportedMouseCanvas.x = x;
+          this.lastReportedMouseCanvas.y = y;
+        }
+      } else {
+        this.lastReportedMouseCanvas = { x, y };
+      }
       this.mouseCanvas.x = x;
       this.mouseCanvas.y = y;
-    }
-    if (!this.isKeyboardActive()) {
-      this.lastInputSource = 'mouse';
     }
     this.reprojectMouse();
   }
@@ -329,6 +339,7 @@ export class GameEngine {
     this.floatingTexts = [];
     this.killBanner = null;
     this.mouseCanvas = null;
+    this.lastReportedMouseCanvas = null;
 
     const selectedSkin = SKINS.find((s) => s.id === skinId) || SKINS[0];
 
@@ -633,6 +644,7 @@ export class GameEngine {
       this.animFrameId = null;
     }
     this.mouseCanvas = null;
+    this.lastReportedMouseCanvas = null;
     this.isMouseDown = false;
     this.isSpaceDown = false;
     this.isShiftDown = false;
@@ -758,52 +770,43 @@ export class GameEngine {
       }
     }
 
+    const dtScale = Math.min(2.0, Math.max(0.5, dt / 16.6667));
+
     if (this.player && !this.player.isDead) {
       this.stats.timeAlive += dt / 1000;
       this.stats.score = this.player.score;
       this.stats.length = this.player.body.length;
       this.stats.kills = this.player.kills;
 
-      const isArrowHeld = this.isKeyboardActive();
+      const turnRate = this.getSnakeTurnSpeed(this.player) * dtScale;
 
-      if (isArrowHeld || this.lastInputSource === 'keyboard') {
-        if (this.controlMode === 'directional') {
-          let ix = 0;
-          let iy = 0;
-          if (this.keyboardKeys.right) ix += 1;
-          if (this.keyboardKeys.left) ix -= 1;
-          if (this.keyboardKeys.down) iy += 1;
-          if (this.keyboardKeys.up) iy -= 1;
-
-          if (ix !== 0 || iy !== 0) {
-            this.player.targetAngle = Math.atan2(iy, ix);
-          }
-          // Project mouseWorld ahead in the target direction
-          this.mouseWorld.x = this.player.head.x + Math.cos(this.player.targetAngle) * 350;
-          this.mouseWorld.y = this.player.head.y + Math.sin(this.player.targetAngle) * 350;
-        } else {
-          // Classic Slither mode: Left/Right rotate continuously, Down reverses 180°
-          if (this.keyboardKeys.left && !this.keyboardKeys.right) {
-            this.player.targetAngle = this.player.angle - Math.PI / 2;
-          } else if (this.keyboardKeys.right && !this.keyboardKeys.left) {
-            this.player.targetAngle = this.player.angle + Math.PI / 2;
-          } else if (this.keyboardKeys.down) {
-            this.player.targetAngle = this.player.angle + Math.PI;
-          } else if (!isArrowHeld) {
-            this.player.targetAngle = this.player.angle;
-          }
-          this.mouseWorld.x = this.player.head.x + Math.cos(this.player.angle) * 350;
-          this.mouseWorld.y = this.player.head.y + Math.sin(this.player.angle) * 350;
+      if (this.lastInputSource === 'keyboard') {
+        // Classic Slither steering: Left/Right rotate continuously relative to current heading
+        if (this.keyboardKeys.left && !this.keyboardKeys.right) {
+          this.player.angle -= turnRate;
+        } else if (this.keyboardKeys.right && !this.keyboardKeys.left) {
+          this.player.angle += turnRate;
         }
+        while (this.player.angle < -Math.PI) this.player.angle += Math.PI * 2;
+        while (this.player.angle > Math.PI) this.player.angle -= Math.PI * 2;
+        this.player.targetAngle = this.player.angle;
+
+        // Project mouseWorld ahead in the snake's current heading
+        this.mouseWorld.x = this.player.head.x + Math.cos(this.player.angle) * 350;
+        this.mouseWorld.y = this.player.head.y + Math.sin(this.player.angle) * 350;
       } else {
-        // Continuously update mouseWorld from screen cursor position so steering tracks
-        // cursor direction seamlessly even when stationary or as camera moves
+        // Mouse steering
         this.reprojectMouse();
 
         // Steering towards cursor in world coordinates
         const dx = this.mouseWorld.x - this.player.head.x;
         const dy = this.mouseWorld.y - this.player.head.y;
-        if (dx * dx + dy * dy > 400) {
+        const distSq = dx * dx + dy * dy;
+
+        // Deadzone: only update targetAngle if cursor is beyond head radius + margin
+        // to avoid erratic spinning when cursor is right over the snake head
+        const deadzoneSq = Math.max(900, (this.player.radius * 1.6) * (this.player.radius * 1.6));
+        if (distSq > deadzoneSq) {
           this.player.targetAngle = Math.atan2(dy, dx);
         }
       }
@@ -813,7 +816,7 @@ export class GameEngine {
         (this.isMouseDown ||
           this.isSpaceDown ||
           this.isShiftDown ||
-          (this.controlMode === 'classic' && this.keyboardKeys.up)) &&
+          this.keyboardKeys.up) &&
         canBoost;
       this.player.isBoosting = wantsBoost;
       sound.setBoosting(wantsBoost);
@@ -831,7 +834,7 @@ export class GameEngine {
     for (let i = 0; i < this.snakes.length; i++) {
       const snake = this.snakes[i];
       if (snake.isDead) continue;
-      this.updateSnakePhysics(snake);
+      this.updateSnakePhysics(snake, dtScale);
     }
 
     // Rebuild Body Spatial Grid with fresh post-physics positions
@@ -902,7 +905,7 @@ export class GameEngine {
     }
   }
 
-  private updateSnakePhysics(snake: Snake): void {
+  private updateSnakePhysics(snake: Snake, dtScale: number = 1.0): void {
     if (snake.invulnerableTimer > 0) {
       snake.invulnerableTimer -= 1;
     }
@@ -912,12 +915,14 @@ export class GameEngine {
     while (diff < -Math.PI) diff += Math.PI * 2;
     while (diff > Math.PI) diff -= Math.PI * 2;
 
-    const maxTurn = snake.isBoosting ? BOOST_TURN_SPEED : TURN_SPEED;
+    const maxTurn = this.getSnakeTurnSpeed(snake) * dtScale;
     snake.angle += Math.sign(diff) * Math.min(Math.abs(diff), maxTurn);
+    while (snake.angle < -Math.PI) snake.angle += Math.PI * 2;
+    while (snake.angle > Math.PI) snake.angle -= Math.PI * 2;
 
     // 2. Speed and Boost Logic
     const targetSpeed = snake.isBoosting ? snake.boostSpeed : snake.baseSpeed;
-    snake.speed += (targetSpeed - snake.speed) * 0.2;
+    snake.speed += (targetSpeed - snake.speed) * Math.min(1, 0.2 * dtScale);
 
     // Boosting consumes mass and drops glowing food orbs behind
     if (snake.isBoosting) {
@@ -962,8 +967,8 @@ export class GameEngine {
     }
 
     // 3. Move Head Forward
-    snake.head.x += Math.cos(snake.angle) * snake.speed;
-    snake.head.y += Math.sin(snake.angle) * snake.speed;
+    snake.head.x += Math.cos(snake.angle) * (snake.speed * dtScale);
+    snake.head.y += Math.sin(snake.angle) * (snake.speed * dtScale);
 
     // 4. Update Dynamic Radius and Target Length
     // Logarithmic segment scaling: capped at 220 visual joints so performance never drops!

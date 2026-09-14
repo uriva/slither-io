@@ -5,7 +5,7 @@ import { GameEngine } from '@/game/engine';
 import { Minimap } from './Minimap';
 import { sound } from '@/game/audio';
 import { MIN_BOOST_MASS } from '@/game/constants';
-import { ChatMessage, ControlMode } from '@/game/types';
+import { ChatMessage } from '@/game/types';
 import { ChatOverlay } from './ChatOverlay';
 import { Volume2, VolumeX, Trophy, Zap, Skull, Shield, ZoomIn, ZoomOut, Mouse, Users, Activity, Navigation } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -18,8 +18,6 @@ interface GameHUDProps {
   isChatOpen: boolean;
   onChatOpenChange: (open: boolean) => void;
   onSendMessage: (text: string) => void;
-  controlMode?: ControlMode;
-  onToggleControlMode?: () => void;
   onBoostStart: () => void;
   onBoostEnd: () => void;
   onZoomIn: () => void;
@@ -35,8 +33,6 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   isChatOpen,
   onChatOpenChange,
   onSendMessage,
-  controlMode = 'directional',
-  onToggleControlMode,
   onBoostStart,
   onBoostEnd,
   onZoomIn,
@@ -235,19 +231,14 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           </div>
 
           <div className="hidden md:flex items-center gap-2.5 px-3 py-1.5 rounded-lg bg-slate-950/70 border border-white/10 backdrop-blur-md text-[11px] font-mono text-slate-400">
-            <button
-              onClick={onToggleControlMode}
-              title="Click or press 'C' to switch steering mode"
-              className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 text-cyan-300 transition-colors cursor-pointer"
-            >
+            <span className="flex items-center gap-1.5 text-cyan-300">
               <Navigation className="w-3 h-3 text-cyan-400" />
-              <span>{controlMode === 'directional' ? '8-Way Arrows / WASD' : 'Classic Turn (← →)'}</span>
-              <kbd className="text-[9px] text-cyan-400/80 font-sans px-1 py-0.5 bg-white/10 rounded font-semibold">C</kbd>
-            </button>
+              <span>← → / A D Steer</span>
+            </span>
             <span>•</span>
             <span className="flex items-center gap-1 text-slate-300">
               <Zap className="w-3 h-3 text-yellow-400" />
-              {controlMode === 'directional' ? 'Space/Shift Boost' : '↑/Space Boost'}
+              <span>↑ / Space / Shift Boost</span>
             </span>
             <span>•</span>
             <span className="flex items-center gap-1 text-slate-300">
