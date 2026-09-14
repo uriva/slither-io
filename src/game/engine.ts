@@ -19,6 +19,7 @@ import {
   BASE_SPEED,
   BOOST_SPEED,
   TURN_SPEED,
+  BOOST_TURN_SPEED,
   MIN_BOOST_MASS,
   INITIAL_FOOD_COUNT,
   PREY_COUNT,
@@ -290,13 +291,10 @@ export class GameEngine {
   }
 
   public getSnakeTurnSpeed(snake: Snake): number {
-    // Authentic Slither.io turn speed: base 0.038 rad/frame at 60fps
-    const baseTurnSpeed = TURN_SPEED;
-    // Scale calculation: larger snakes turn in wider arcs
-    const sc = Math.min(6, 1 + Math.max(0, snake.radius - BASE_RADIUS) / 5.5);
-    // Authentic Slither.io scang formula:
-    const scang = 0.13 + 0.87 * Math.pow((7 - sc) / 6, 2);
-    return baseTurnSpeed * scang;
+    const baseTurn = snake.isBoosting ? BOOST_TURN_SPEED : TURN_SPEED;
+    // Keep tight, nimble handling for all sizes (never drops below 88% of base)
+    const sizeFactor = Math.max(0.88, 1.0 - (snake.radius - BASE_RADIUS) * 0.003);
+    return baseTurn * sizeFactor;
   }
 
   public setMouseCanvas(x: number, y: number): void {
@@ -770,7 +768,7 @@ export class GameEngine {
       }
     }
 
-    const dtScale = Math.min(2.0, Math.max(0.5, dt / 16.6667));
+    const dtScale = Math.min(2.0, Math.max(0.1, dt / 16.6667));
 
     if (this.player && !this.player.isDead) {
       this.stats.timeAlive += dt / 1000;
@@ -803,10 +801,8 @@ export class GameEngine {
         const dy = this.mouseWorld.y - this.player.head.y;
         const distSq = dx * dx + dy * dy;
 
-        // Deadzone: only update targetAngle if cursor is beyond head radius + margin
-        // to avoid erratic spinning when cursor is right over the snake head
-        const deadzoneSq = Math.max(900, (this.player.radius * 1.6) * (this.player.radius * 1.6));
-        if (distSq > deadzoneSq) {
+        // Cursor beyond 8px turns tightly and responsively towards cursor
+        if (distSq > 64) {
           this.player.targetAngle = Math.atan2(dy, dx);
         }
       }
