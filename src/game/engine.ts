@@ -425,6 +425,7 @@ export class GameEngine {
       turnSpeed: TURN_SPEED,
       trailTime: 0,
       invulnerableTimer: isPlayer ? 180 : 90, // 3s spawn protection
+      spawnTimestamp: Date.now(),
       aiTimer: Math.floor(Math.random() * 60),
     };
   }
@@ -487,7 +488,7 @@ export class GameEngine {
     sound.setBoosting(false);
   }
 
-  public syncRemotePeers(peers: Record<string, PlayerPresence>): void {
+  public syncRemotePeers(peers: Record<string, PlayerPresence>, myPlayerId?: string, myPeerId?: string): void {
     const peerIds = new Set(Object.keys(peers));
     const now = Date.now();
 
@@ -503,11 +504,36 @@ export class GameEngine {
 
     // 2. Add or update active peer snakes
     for (const [peerId, peer] of Object.entries(peers)) {
-      if (!peer || !peer.head || peer.isDead) continue;
+      if (!peer || !peer.head) continue;
+
+      // Bulletproof self-filtering: never spawn yourself
+      if (myPeerId && (peerId === myPeerId || peer.id === myPeerId)) continue;
+      if (myPlayerId && (peer.id === myPlayerId || peerId === myPlayerId)) continue;
       if (this.player && (peer.id === this.player.id || peerId === this.player.id)) continue;
 
-      let remoteSnake = this.snakes.find((s) => s.id === peerId);
-      if (!remoteSnake) {
+      let remoteSnake = this.snakes.find((s) => s.id === peerId || s.id === peer.id);
+
+      // Handle death state:
+      if (remoteSnake) {
+        if (remoteSnake.isDead) {
+          // If already killed on our screen, do NOT revive from delayed network packets
+          // unless the peer has genuinely respawned with a strictly newer spawnTimestamp!
+          if (peer.spawnTimestamp && peer.spawnTimestamp > remoteSnake.spawnTimestamp && !peer.isDead) {
+            remoteSnake.isDead = false;
+            remoteSnake.spawnTimestamp = peer.spawnTimestamp;
+            remoteSnake.head = { x: peer.head.x, y: peer.head.y };
+          } else {
+            continue;
+          }
+        }
+        if (peer.isDead) {
+          this.killSnake(remoteSnake, 'Eliminated');
+          continue;
+        }
+      } else {
+        // Don't spawn snakes that are already dead
+        if (peer.isDead) continue;
+
         const skin = SKINS.find((sk) => sk.id === peer.skinId) || SKINS[0];
         remoteSnake = this.createSnake(
           peerId,
@@ -516,9 +542,10 @@ export class GameEngine {
           skin,
           peer.head.x,
           peer.head.y,
-          peer.body?.length || INITIAL_SNAKE_LENGTH
+          INITIAL_SNAKE_LENGTH
         );
         remoteSnake.isRemoteHuman = true;
+        remoteSnake.spawnTimestamp = peer.spawnTimestamp || Date.now();
         this.snakes.push(remoteSnake);
       }
 
@@ -526,7 +553,6 @@ export class GameEngine {
       remoteSnake.score = peer.score || remoteSnake.score;
       remoteSnake.kills = peer.kills || remoteSnake.kills;
       remoteSnake.isBoosting = !!peer.isBoosting;
-      remoteSnake.isDead = !!peer.isDead;
       remoteSnake.speed = peer.speed || remoteSnake.speed;
       remoteSnake.radius = peer.radius || remoteSnake.radius;
       remoteSnake.targetAngle = peer.angle;

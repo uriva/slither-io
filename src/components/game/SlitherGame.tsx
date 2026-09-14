@@ -51,7 +51,7 @@ export const SlitherGame: React.FC = () => {
   }, []);
 
   const currentRoom = useMemo(() => getArenaRoom(roomId), [roomId]);
-  const { publishPresence, peers } = db.rooms.usePresence(currentRoom);
+  const { publishPresence, peers, user } = db.rooms.usePresence(currentRoom);
 
   const peerCount = Object.keys(peers || {}).length;
   const onlineCount = peerCount + (gameState === 'playing' ? 1 : 0);
@@ -73,12 +73,16 @@ export const SlitherGame: React.FC = () => {
   // Periodic state refresh for HUD
   const [, setTick] = useState(0);
 
-  // Sync peers into GameEngine
+  // Sync peers into GameEngine with bulletproof self-filtering
   useEffect(() => {
     if (engineRef.current && peers) {
-      engineRef.current.syncRemotePeers(peers as unknown as Record<string, PlayerPresence>);
+      engineRef.current.syncRemotePeers(
+        peers as unknown as Record<string, PlayerPresence>,
+        playerIdRef.current,
+        user?.peerId
+      );
     }
-  }, [peers]);
+  }, [peers, user]);
 
   // Publish player presence to InstantDB room periodically (~18Hz)
   useEffect(() => {
@@ -104,6 +108,7 @@ export const SlitherGame: React.FC = () => {
         kills: player.kills,
         isBoosting: player.isBoosting,
         isDead: player.isDead,
+        spawnTimestamp: player.spawnTimestamp || Date.now(),
         updatedAt: Date.now(),
       });
     }, 55);
@@ -156,6 +161,7 @@ export const SlitherGame: React.FC = () => {
               kills: player.kills,
               isBoosting: player.isBoosting,
               isDead: player.isDead,
+              spawnTimestamp: player.spawnTimestamp || Date.now(),
               updatedAt: Date.now(),
             });
           }
@@ -213,6 +219,17 @@ export const SlitherGame: React.FC = () => {
         }
       } else {
         setIsNewHighScore(false);
+      }
+
+      // Immediately notify all peers of death so no delayed packets resurrect the corpse
+      try {
+        publishPresence({
+          id: playerIdRef.current,
+          isDead: true,
+          updatedAt: Date.now(),
+        });
+      } catch {
+        // Ignore
       }
     };
 

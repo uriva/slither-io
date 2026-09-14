@@ -43,6 +43,7 @@ export interface Snake {
   turnSpeed: number;
   trailTime: number;
   invulnerableTimer: number; // Spawn shield countdown (in frames)
+  spawnTimestamp: number;
   aiTimer?: number;
   aiState?: 'wander' | 'eat' | 'attack' | 'flee';
   aiTarget?: Point | null;
@@ -120,6 +121,7 @@ export interface PlayerPresence {
   kills: number;
   isBoosting: boolean;
   isDead: boolean;
+  spawnTimestamp: number;
   body: { x: number; y: number; radius: number }[];
   updatedAt: number;
 }
