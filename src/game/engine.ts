@@ -74,6 +74,7 @@ export class GameEngine {
   // Pre-rendered sprite cache for high-performance orb drawing
   private orbSprites: HTMLCanvasElement[] = [];
   private preySprite: HTMLCanvasElement | null = null;
+  private gridPattern: CanvasPattern | null = null;
 
   private nextOrbId = 1;
   private nextTextId = 1;
@@ -91,7 +92,27 @@ export class GameEngine {
 
   constructor() {
     this.initOrbSprites();
+    this.initGridPattern();
     this.initOrbs();
+  }
+
+  // Pre-render procedural background pattern once
+  private initGridPattern(): void {
+    if (typeof document === 'undefined') return;
+    const tile = document.createElement('canvas');
+    tile.width = 140;
+    tile.height = 140;
+    const tCtx = tile.getContext('2d');
+    if (!tCtx) return;
+
+    tCtx.strokeStyle = 'rgba(255, 255, 255, 0.035)';
+    tCtx.lineWidth = 1;
+    tCtx.strokeRect(0, 0, 140, 140);
+
+    tCtx.fillStyle = 'rgba(0, 240, 255, 0.16)';
+    tCtx.fillRect(0, 0, 3, 3);
+
+    this.gridPattern = tCtx.createPattern(tile, 'repeat');
   }
 
   // Pre-render orb textures to offscreen canvases once
@@ -935,63 +956,42 @@ export class GameEngine {
   }
 
   private drawBackground(ctx: CanvasRenderingContext2D): void {
-    const gridSize = 140;
-    const halfW = (this.viewport.width / (2 * this.camera.zoom)) + 140;
-    const halfH = (this.viewport.height / (2 * this.camera.zoom)) + 140;
-
+    const halfW = (this.viewport.width / (2 * this.camera.zoom)) + 100;
+    const halfH = (this.viewport.height / (2 * this.camera.zoom)) + 100;
     const viewLeft = this.camera.x - halfW;
-    const viewRight = this.camera.x + halfW;
     const viewTop = this.camera.y - halfH;
-    const viewBottom = this.camera.y + halfH;
+    const viewW = halfW * 2;
+    const viewH = halfH * 2;
 
-    const startX = Math.floor(viewLeft / gridSize) * gridSize;
-    const endX = Math.ceil(viewRight / gridSize) * gridSize;
-    const startY = Math.floor(viewTop / gridSize) * gridSize;
-    const endY = Math.ceil(viewBottom / gridSize) * gridSize;
-
-    ctx.lineWidth = 1;
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.035)';
-
-    ctx.beginPath();
-    for (let x = startX; x <= endX; x += gridSize) {
-      ctx.moveTo(x, viewTop);
-      ctx.lineTo(x, viewBottom);
-    }
-    for (let y = startY; y <= endY; y += gridSize) {
-      ctx.moveTo(viewLeft, y);
-      ctx.lineTo(viewRight, y);
-    }
-    ctx.stroke();
-
-    // Subtle star nodes
-    ctx.fillStyle = 'rgba(0, 240, 255, 0.16)';
-    for (let x = startX; x <= endX; x += gridSize) {
-      for (let y = startY; y <= endY; y += gridSize) {
-        if (x * x + y * y <= ARENA_RADIUS * ARENA_RADIUS) {
-          ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
-        }
-      }
+    if (this.gridPattern) {
+      ctx.fillStyle = this.gridPattern;
+      ctx.fillRect(viewLeft, viewTop, viewW, viewH);
     }
   }
 
   private drawBoundary(ctx: CanvasRenderingContext2D): void {
     const pulse = 0.5 + Math.sin(this.gameTime * 0.04) * 0.2;
 
-    ctx.save();
+    // Outer glow ring
     ctx.beginPath();
     ctx.arc(0, 0, ARENA_RADIUS, 0, Math.PI * 2);
-    ctx.lineWidth = 16;
-    ctx.strokeStyle = `rgba(255, 30, 80, ${pulse * 0.4})`;
+    ctx.lineWidth = 14;
+    ctx.strokeStyle = `rgba(255, 30, 80, ${pulse * 0.35})`;
     ctx.stroke();
 
+    // Mid laser ring
     ctx.beginPath();
     ctx.arc(0, 0, ARENA_RADIUS, 0, Math.PI * 2);
-    ctx.lineWidth = 4;
-    ctx.strokeStyle = `rgba(255, 50, 100, ${pulse + 0.3})`;
-    ctx.shadowColor = '#ff2255';
-    ctx.shadowBlur = 18;
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = `rgba(255, 60, 110, ${pulse * 0.6 + 0.3})`;
     ctx.stroke();
-    ctx.restore();
+
+    // Sharp laser core
+    ctx.beginPath();
+    ctx.arc(0, 0, ARENA_RADIUS, 0, Math.PI * 2);
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = '#ffffff';
+    ctx.stroke();
   }
 
   private drawOrbs(ctx: CanvasRenderingContext2D): void {

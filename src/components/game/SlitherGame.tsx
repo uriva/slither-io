@@ -10,6 +10,7 @@ import { db, arenaRoom } from '@/lib/instant';
 
 export const SlitherGame: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
   const engineRef = useRef<GameEngine | null>(null);
   const lastPinchDistRef = useRef<number | null>(null);
 
@@ -137,16 +138,25 @@ export const SlitherGame: React.FC = () => {
       const engine = engineRef.current;
       if (!canvas || !engine) return;
 
-      const dpr = window.devicePixelRatio || 1;
+      // Clamp DPR to max 1.25 for crisp graphics with huge GPU performance gains
+      const dpr = Math.min(1.25, window.devicePixelRatio || 1);
       const w = window.innerWidth;
       const h = window.innerHeight;
 
-      canvas.width = w * dpr;
-      canvas.height = h * dpr;
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
       canvas.style.width = `${w}px`;
       canvas.style.height = `${h}px`;
 
-      engine.setViewport(w, h);
+      // Get optimized, direct-to-screen hardware-accelerated 2D context
+      if (!ctxRef.current) {
+        ctxRef.current = canvas.getContext('2d', {
+          alpha: false,
+          desynchronized: true,
+        });
+      }
+
+      engine.setViewport(canvas.width, canvas.height);
     };
 
     window.addEventListener('resize', handleResize);
@@ -177,18 +187,11 @@ export const SlitherGame: React.FC = () => {
     let animId: number;
 
     const renderLoop = () => {
-      const canvas = canvasRef.current;
       const engine = engineRef.current;
+      const ctx = ctxRef.current;
 
-      if (canvas && engine && gameState === 'playing') {
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          const dpr = window.devicePixelRatio || 1;
-          ctx.save();
-          ctx.scale(dpr, dpr);
-          engine.render(ctx);
-          ctx.restore();
-        }
+      if (ctx && engine && gameState === 'playing') {
+        engine.render(ctx);
       }
 
       animId = requestAnimationFrame(renderLoop);
