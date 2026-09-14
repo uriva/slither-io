@@ -1,5 +1,5 @@
 import { Snake, Orb, Point } from './types';
-import { ARENA_RADIUS } from './constants';
+import { ARENA_RADIUS, MIN_BOOST_MASS } from './constants';
 import { SpatialGrid, GridItem } from './spatialGrid';
 
 interface BodySegmentItem extends GridItem {
@@ -20,43 +20,37 @@ export class BotAIController {
 
     const headX = bot.head.x;
     const headY = bot.head.y;
+    const canBoost = bot.score > MIN_BOOST_MASS + 8;
 
     // 1. Check Arena Boundary Threat
     const distFromCenter = Math.hypot(headX, headY);
-    if (distFromCenter > ARENA_RADIUS - 350) {
-      // Steer sharply back toward arena center (0, 0)
+    if (distFromCenter > ARENA_RADIUS - 400) {
       const toCenterAngle = Math.atan2(-headY, -headX);
       bot.targetAngle = toCenterAngle;
-      bot.isBoosting = distFromCenter > ARENA_RADIUS - 150;
+      bot.isBoosting = canBoost && distFromCenter > ARENA_RADIUS - 200;
       return;
     }
 
     // 2. Proactive Collision Avoidance (Forward "Whiskers" Raycast)
-    // We check three distances: close (urgent), medium (warning), far
-    const lookAheadDist = bot.radius * (bot.isBoosting ? 5.5 : 4.0);
+    const lookAheadDist = bot.radius * (bot.isBoosting ? 5.2 : 3.8);
     const anglesToCheck = [0, 0.45, -0.45, 0.9, -0.9, 1.4, -1.4];
     let bestClearAngle: number | null = null;
-    let maxFreeDist = 0;
-
     let urgentDanger = false;
 
     for (const offset of anglesToCheck) {
       const rayAngle = bot.angle + offset;
       let clear = true;
 
-      // Sample along ray
       for (let step = 1; step <= 3; step++) {
         const checkDist = (lookAheadDist * step) / 3;
         const rx = headX + Math.cos(rayAngle) * checkDist;
         const ry = headY + Math.sin(rayAngle) * checkDist;
 
-        // Check if ray leaves arena
-        if (Math.hypot(rx, ry) >= ARENA_RADIUS - 50) {
+        if (Math.hypot(rx, ry) >= ARENA_RADIUS - 60) {
           clear = false;
           break;
         }
 
-        // Check collision with other snake bodies
         const candidates = bodyGrid.query(rx, ry, bot.radius * 1.3);
         const dangerHit = candidates.some((c) => c.snakeId !== bot.id);
         if (dangerHit) {
@@ -66,33 +60,24 @@ export class BotAIController {
         }
       }
 
-      if (clear) {
-        if (bestClearAngle === null) {
-          bestClearAngle = rayAngle;
-        }
-      } else {
-        // Not completely clear
+      if (clear && bestClearAngle === null) {
+        bestClearAngle = rayAngle;
       }
     }
 
-    // If danger detected, immediately turn to clear angle and avoid collision
-    if (urgentDanger || bestClearAngle !== null && bestClearAngle !== bot.angle) {
-      if (bestClearAngle !== null) {
-        bot.targetAngle = bestClearAngle;
-      } else {
-        // Desperation turn
-        bot.targetAngle = bot.angle + Math.PI * 0.75;
-      }
-      bot.isBoosting = false; // Slow down to turn sharper
+    // If danger detected, turn to clear path and release boost to turn tightly
+    if (urgentDanger || (bestClearAngle !== null && Math.abs(bestClearAngle - bot.angle) > 0.4)) {
+      bot.targetAngle = bestClearAngle !== null ? bestClearAngle : bot.angle + Math.PI * 0.75;
+      bot.isBoosting = false;
       return;
     }
 
-    // 3. Combat / Hunting / Opportunistic behavior (recalculated every ~15 frames)
-    if (bot.aiTimer % 15 === 0 || !bot.aiTarget) {
+    // 3. Tactical Behavior & Boost Decision (every 12 frames)
+    if (bot.aiTimer % 12 === 0 || !bot.aiTarget) {
       let chosenTarget: Point | null = null;
       let wantBoost = false;
 
-      // Check nearby opponent snakes
+      // Find nearest opponent
       let closestOpponent: Snake | null = null;
       let closestDist = 900;
 
@@ -105,26 +90,30 @@ export class BotAIController {
         }
       }
 
-      // If significantly bigger than nearby snake, attempt to cut them off!
-      if (closestOpponent && bot.body.length > closestOpponent.body.length * 1.25 && closestDist < 450) {
-        // Predict opponent head future position
-        const predX = closestOpponent.head.x + Math.cos(closestOpponent.angle) * 70;
-        const predY = closestOpponent.head.y + Math.sin(closestOpponent.angle) * 70;
-        chosenTarget = { x: predX, y: predY };
-        wantBoost = bot.body.length > 25 && closestDist < 250 && Math.random() < 0.6;
+      // Interception / Cut-Off Attack:
+      // If competitor is nearby and bot has good mass, boost across their trajectory!
+      if (closestOpponent && closestDist < 380 && canBoost) {
+        const oppAngle = closestOpponent.angle;
+        // Lead the target by 80px
+        const leadX = closestOpponent.head.x + Math.cos(oppAngle) * 90;
+        const leadY = closestOpponent.head.y + Math.sin(oppAngle) * 90;
+
+        chosenTarget = { x: leadX, y: leadY };
+        // 65% chance to boost when attempting to cut someone off!
+        wantBoost = Math.random() < 0.65;
       } else {
-        // Query nearby food cluster
-        const queryRange = 400;
+        // Scavenge / Food Hunting:
+        const queryRange = 450;
         const nearbyFood = foodGrid.query(headX, headY, queryRange);
 
         if (nearbyFood.length > 0) {
-          // Find food with highest value or dense cluster
           let bestOrb: Orb | null = null;
           let bestScore = -1;
 
           for (const orb of nearbyFood) {
             const d = Math.hypot(orb.x - headX, orb.y - headY);
-            const score = (orb.value * 50) / (d + 20);
+            // High value pellets (kill drops or prey) get huge priority
+            const score = (orb.value * 60) / (d + 20);
             if (score > bestScore) {
               bestScore = score;
               bestOrb = orb;
@@ -133,22 +122,23 @@ export class BotAIController {
 
           if (bestOrb) {
             chosenTarget = { x: bestOrb.x, y: bestOrb.y };
-            // Boost if rushing for a big kill drop
-            if (bestOrb.value >= 5 && bot.body.length > 25 && Math.random() < 0.4) {
-              wantBoost = true;
+            // Boost when racing for big orbs (value >= 3) or fireflies
+            if ((bestOrb.value >= 3 || bestOrb.isPrey) && canBoost) {
+              wantBoost = Math.random() < 0.55;
             }
           }
         }
       }
 
-      // Default to gentle wander if no food/prey
+      // Occasional cruise sprint when wandering in open space
       if (!chosenTarget) {
-        if (Math.random() < 0.05) {
-          const wanderAngle = bot.angle + (Math.random() - 0.5) * 1.8;
+        if (Math.random() < 0.08) {
+          const wanderAngle = bot.angle + (Math.random() - 0.5) * 1.5;
           chosenTarget = {
-            x: headX + Math.cos(wanderAngle) * 300,
-            y: headY + Math.sin(wanderAngle) * 300,
+            x: headX + Math.cos(wanderAngle) * 350,
+            y: headY + Math.sin(wanderAngle) * 350,
           };
+          wantBoost = canBoost && Math.random() < 0.25;
         }
       }
 
@@ -156,10 +146,14 @@ export class BotAIController {
         bot.aiTarget = chosenTarget;
         bot.targetAngle = Math.atan2(chosenTarget.y - headY, chosenTarget.x - headX);
       }
-      bot.isBoosting = wantBoost && bot.body.length > 20;
+
+      bot.isBoosting = wantBoost && canBoost;
     } else if (bot.aiTarget) {
-      // Continue steering toward chosen target
       bot.targetAngle = Math.atan2(bot.aiTarget.y - headY, bot.aiTarget.x - headX);
+      // Turn off boost if mass depleted
+      if (!canBoost) {
+        bot.isBoosting = false;
+      }
     }
   }
 }
