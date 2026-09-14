@@ -3,12 +3,7 @@ class SoundSystem {
   private isMuted: boolean = false;
   private volume: number = 0.5;
 
-  // Boost whoosh nodes (aerodynamic filtered rush + warm sub swell)
-  private boostNoiseSource: AudioBufferSourceNode | null = null;
-  private boostFilter: BiquadFilterNode | null = null;
-  private boostGain: GainNode | null = null;
-  private boostSubOsc: OscillatorNode | null = null;
-  private boostSubGain: GainNode | null = null;
+  private isBoostingState: boolean = false;
 
   // Ambient deep drone
   private ambientOsc: OscillatorNode | null = null;
@@ -66,12 +61,6 @@ class SoundSystem {
     if (this.ambientGain && this.ctx) {
       this.ambientGain.gain.setValueAtTime(muted ? 0 : this.volume * 0.04, this.ctx.currentTime);
     }
-    if (this.boostGain && this.ctx) {
-      this.boostGain.gain.setValueAtTime(0, this.ctx.currentTime);
-    }
-    if (this.boostSubGain && this.ctx) {
-      this.boostSubGain.gain.setValueAtTime(0, this.ctx.currentTime);
-    }
   }
 
   public getMuted(): boolean {
@@ -118,93 +107,123 @@ class SoundSystem {
     }
   }
 
-  // Sleek Aerodynamic Sci-Fi Slipstream & Warm Sub Boost
+  // Non-continuous acceleration sound: marks only beginning and ending of boost
   public setBoosting(boosting: boolean): void {
-    if (this.isMuted || !this.ctx) {
-      if (this.boostGain && this.ctx) {
-        this.boostGain.gain.setValueAtTime(0, this.ctx.currentTime);
-      }
-      if (this.boostSubGain && this.ctx) {
-        this.boostSubGain.gain.setValueAtTime(0, this.ctx.currentTime);
-      }
-      return;
+    if (boosting === this.isBoostingState) return;
+
+    if (boosting) {
+      this.isBoostingState = true;
+      this.playBoostStart();
+    } else {
+      this.isBoostingState = false;
+      this.playBoostEnd();
     }
+  }
 
+  // Boost Initiation: Crisp upward aerodynamic surge & ignition chirp
+  public playBoostStart(): void {
+    if (this.isMuted || !this.ctx) return;
     try {
-      if (!this.boostNoiseSource) {
-        // Create 2-second looping soft pink/brown noise buffer for natural aerodynamic rush
-        const bufferSize = this.ctx.sampleRate * 2;
-        const noiseBuffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
-        const data = noiseBuffer.getChannelData(0);
-        let lastOut = 0.0;
-        for (let i = 0; i < bufferSize; i++) {
-          const white = Math.random() * 2 - 1;
-          // Pink noise 1-pole filter
-          lastOut = (lastOut * 0.94) + (white * 0.06);
-          data[i] = lastOut * 3.5;
-        }
-
-        this.boostNoiseSource = this.ctx.createBufferSource();
-        this.boostNoiseSource.buffer = noiseBuffer;
-        this.boostNoiseSource.loop = true;
-
-        this.boostFilter = this.ctx.createBiquadFilter();
-        this.boostFilter.type = 'lowpass';
-        this.boostFilter.frequency.setValueAtTime(260, this.ctx.currentTime);
-        this.boostFilter.Q.setValueAtTime(1.5, this.ctx.currentTime);
-
-        this.boostGain = this.ctx.createGain();
-        this.boostGain.gain.setValueAtTime(0, this.ctx.currentTime);
-
-        this.boostNoiseSource.connect(this.boostFilter);
-        this.boostFilter.connect(this.boostGain);
-        this.boostGain.connect(this.ctx.destination);
-        this.boostNoiseSource.start();
-
-        // Warm sub-bass harmonic glide (gentle sine wave)
-        this.boostSubOsc = this.ctx.createOscillator();
-        this.boostSubGain = this.ctx.createGain();
-        this.boostSubOsc.type = 'sine';
-        this.boostSubOsc.frequency.setValueAtTime(65, this.ctx.currentTime);
-        this.boostSubGain.gain.setValueAtTime(0, this.ctx.currentTime);
-
-        this.boostSubOsc.connect(this.boostSubGain);
-        this.boostSubGain.connect(this.ctx.destination);
-        this.boostSubOsc.start();
-      }
-
       const now = this.ctx.currentTime;
-      if (this.boostGain && this.boostFilter && this.boostSubGain && this.boostSubOsc) {
-        if (boosting && !this.isMuted) {
-          // Smooth aerodynamic whoosh sweep
-          this.boostGain.gain.cancelScheduledValues(now);
-          this.boostGain.gain.setTargetAtTime(this.volume * 0.18, now, 0.08);
 
-          this.boostFilter.frequency.cancelScheduledValues(now);
-          this.boostFilter.frequency.setTargetAtTime(680, now, 0.12);
+      // 1. Upward energetic surge tone (triangle wave)
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
 
-          this.boostSubGain.gain.cancelScheduledValues(now);
-          this.boostSubGain.gain.setTargetAtTime(this.volume * 0.14, now, 0.08);
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(130, now);
+      osc.frequency.exponentialRampToValueAtTime(340, now + 0.1);
 
-          this.boostSubOsc.frequency.cancelScheduledValues(now);
-          this.boostSubOsc.frequency.setTargetAtTime(85, now, 0.15);
-        } else {
-          // Fade out smoothly without abrupt click
-          this.boostGain.gain.cancelScheduledValues(now);
-          this.boostGain.gain.setTargetAtTime(0.0001, now, 0.07);
+      gain.gain.setValueAtTime(this.volume * 0.26, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
 
-          this.boostFilter.frequency.cancelScheduledValues(now);
-          this.boostFilter.frequency.setTargetAtTime(260, now, 0.1);
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
 
-          this.boostSubGain.gain.cancelScheduledValues(now);
-          this.boostSubGain.gain.setTargetAtTime(0.0001, now, 0.07);
+      osc.start(now);
+      osc.stop(now + 0.12);
 
-          this.boostSubOsc.frequency.cancelScheduledValues(now);
-          this.boostSubOsc.frequency.setTargetAtTime(60, now, 0.1);
-        }
+      // 2. Air burst puff (short bandpass noise burst)
+      const bufferSize = Math.floor(this.ctx.sampleRate * 0.09);
+      const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
       }
+
+      const noise = this.ctx.createBufferSource();
+      noise.buffer = buffer;
+
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(450, now);
+      filter.frequency.exponentialRampToValueAtTime(950, now + 0.09);
+      filter.Q.setValueAtTime(2.2, now);
+
+      const noiseGain = this.ctx.createGain();
+      noiseGain.gain.setValueAtTime(this.volume * 0.2, now);
+      noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+
+      noise.connect(filter);
+      filter.connect(noiseGain);
+      noiseGain.connect(this.ctx.destination);
+
+      noise.start(now);
     } catch {
-      // Ignore audio unlock errors
+      // Ignore
+    }
+  }
+
+  // Boost Release: Soft pneumatic exhaust & gentle descending pitch drop
+  public playBoostEnd(): void {
+    if (this.isMuted || !this.ctx) return;
+    try {
+      const now = this.ctx.currentTime;
+
+      // 1. Soft descending pitch drop
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(260, now);
+      osc.frequency.exponentialRampToValueAtTime(110, now + 0.09);
+
+      gain.gain.setValueAtTime(this.volume * 0.18, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
+
+      osc.start(now);
+      osc.stop(now + 0.1);
+
+      // 2. Soft air exhaust release
+      const bufferSize = Math.floor(this.ctx.sampleRate * 0.08);
+      const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
+      }
+
+      const noise = this.ctx.createBufferSource();
+      noise.buffer = buffer;
+
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(550, now);
+      filter.frequency.exponentialRampToValueAtTime(160, now + 0.08);
+
+      const noiseGain = this.ctx.createGain();
+      noiseGain.gain.setValueAtTime(this.volume * 0.15, now);
+      noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+
+      noise.connect(filter);
+      filter.connect(noiseGain);
+      noiseGain.connect(this.ctx.destination);
+
+      noise.start(now);
+    } catch {
+      // Ignore
     }
   }
 
@@ -229,7 +248,7 @@ class SoundSystem {
       osc.stop(now + 0.42);
 
       // Noise explosion burst
-      const bufferSize = this.ctx.sampleRate * 0.32;
+      const bufferSize = Math.floor(this.ctx.sampleRate * 0.32);
       const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
       const data = buffer.getChannelData(0);
       for (let i = 0; i < bufferSize; i++) {
@@ -279,7 +298,7 @@ class SoundSystem {
       gain.gain.setValueAtTime(this.volume * 0.4, now);
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.65);
 
-      osc.connect(filter);
+      osc.connect(gain);
       filter.connect(gain);
       gain.connect(this.ctx.destination);
 
