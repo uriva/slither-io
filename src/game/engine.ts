@@ -237,6 +237,7 @@ export class GameEngine {
   }
 
   public start(playerName: string, skinId: string): void {
+    this.stop();
     sound.init();
     this.isGameOver = false;
     this.gameTime = 0;
@@ -283,7 +284,7 @@ export class GameEngine {
     this.initBots();
 
     this.lastFrameTime = performance.now();
-    this.loop(this.lastFrameTime);
+    this.animFrameId = requestAnimationFrame(this.loop);
   }
 
   private initOrbs(): void {
@@ -453,6 +454,8 @@ export class GameEngine {
   }
 
   private loop = (time: number): void => {
+    if (this.animFrameId === null) return;
+
     const dt = Math.min(32, time - this.lastFrameTime);
     this.lastFrameTime = time;
 
@@ -463,7 +466,11 @@ export class GameEngine {
       this.onStateUpdate(this);
     }
 
-    this.animFrameId = requestAnimationFrame(this.loop);
+    if (!this.isGameOver) {
+      this.animFrameId = requestAnimationFrame(this.loop);
+    } else {
+      this.animFrameId = null;
+    }
   };
 
   public stop(): void {
@@ -883,6 +890,7 @@ export class GameEngine {
       this.isGameOver = true;
       this.stats.killerName = killerName;
       sound.playDeath();
+      this.stop(); // Stop game loop immediately so animation frames don't multiply on respawn
       if (this.onGameOverCallback) {
         this.onGameOverCallback(this.stats);
       }
