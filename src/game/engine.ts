@@ -553,8 +553,10 @@ export class GameEngine {
       if (myPeerId && (peerId === myPeerId || peer.id === myPeerId)) continue;
       if (myPlayerId && (peer.id === myPlayerId || peerId === myPlayerId)) continue;
       if (this.player && (peer.id === this.player.id || peerId === this.player.id)) continue;
-      if (this.player && peer.name === this.player.name && Math.hypot(peer.head.x - this.player.head.x, peer.head.y - this.player.head.y) < 15) {
-        continue;
+      if (this.player && peer.name === this.player.name) {
+        const pdx = peer.head.x - this.player.head.x;
+        const pdy = peer.head.y - this.player.head.y;
+        if (pdx * pdx + pdy * pdy < 225) continue;
       }
 
       let remoteSnake = this.snakes.find((s) => s.id === peerId || s.id === peer.id);
@@ -904,8 +906,8 @@ export class GameEngine {
         continue;
       }
 
-      // 2. Direct Head-to-Head Collision Check (smaller snake loses)
-      for (let j = 0; j < this.snakes.length; j++) {
+      // 2. Direct Head-to-Head Collision Check (each pair checked once: O(N*(N-1)/2))
+      for (let j = sIdx + 1; j < this.snakes.length; j++) {
         const other = this.snakes[j];
         if (other.id === snake.id || other.isDead || other.invulnerableTimer > 0) continue;
 
@@ -1235,6 +1237,16 @@ export class GameEngine {
   }
 
   private drawBoundary(ctx: CanvasRenderingContext2D): void {
+    const halfW = this.viewport.width / (2 * this.camera.zoom);
+    const halfH = this.viewport.height / (2 * this.camera.zoom);
+    const maxScreenRadius = Math.sqrt(halfW * halfW + halfH * halfH);
+
+    // Frustum culling: Skip expensive 62,800px boundary rasterization if completely off-screen
+    const camDist = Math.sqrt(this.camera.x * this.camera.x + this.camera.y * this.camera.y);
+    if (Math.abs(camDist - ARENA_RADIUS) > maxScreenRadius + 30) {
+      return;
+    }
+
     const pulse = 0.5 + Math.sin(this.gameTime * 0.04) * 0.2;
 
     // Outer glow ring
@@ -1354,16 +1366,24 @@ export class GameEngine {
   }
 
   private drawParticles(ctx: CanvasRenderingContext2D): void {
+    const halfW = (this.viewport.width / (2 * this.camera.zoom)) + 40;
+    const halfH = (this.viewport.height / (2 * this.camera.zoom)) + 40;
+    const viewLeft = this.camera.x - halfW;
+    const viewRight = this.camera.x + halfW;
+    const viewTop = this.camera.y - halfH;
+    const viewBottom = this.camera.y + halfH;
+
     for (let i = 0; i < this.particles.length; i++) {
       const p = this.particles[i];
-      ctx.save();
+      if (p.x < viewLeft || p.x > viewRight || p.y < viewTop || p.y > viewBottom) continue;
+
       ctx.globalAlpha = p.alpha;
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.size * (1 - p.life / p.maxLife), 0, Math.PI * 2);
       ctx.fillStyle = p.color;
       ctx.fill();
-      ctx.restore();
     }
+    ctx.globalAlpha = 1.0;
   }
 
   private drawSnakes(ctx: CanvasRenderingContext2D): void {
@@ -1415,7 +1435,6 @@ export class GameEngine {
 
     // 1. If Boosting: Draw single smooth continuous glow aura behind snake (1 fast draw call)
     if (snake.isBoosting) {
-      ctx.save();
       ctx.beginPath();
       ctx.moveTo(snake.body[0].x, snake.body[0].y);
       for (let i = 1; i < bodyLen; i += 2) {
@@ -1427,7 +1446,7 @@ export class GameEngine {
       ctx.strokeStyle = skin.particleColor;
       ctx.globalAlpha = 0.35;
       ctx.stroke();
-      ctx.restore();
+      ctx.globalAlpha = 1.0;
     }
 
     // 2. Base Smooth Continuous Body Stroke (ultra-smooth liquid spine)
@@ -1557,7 +1576,6 @@ export class GameEngine {
     // 8. Draw Spawn Protection Shield
     if (snake.invulnerableTimer > 0) {
       const shieldPulse = 0.5 + Math.sin(this.gameTime * 0.25) * 0.35;
-      ctx.save();
       ctx.beginPath();
       ctx.arc(head.x, head.y, snake.radius * 1.6, 0, Math.PI * 2);
       ctx.strokeStyle = `rgba(0, 240, 255, ${shieldPulse})`;
@@ -1568,22 +1586,34 @@ export class GameEngine {
       ctx.arc(head.x, head.y, snake.radius * 1.6, 0, Math.PI * 2);
       ctx.fillStyle = `rgba(0, 240, 255, ${shieldPulse * 0.15})`;
       ctx.fill();
-      ctx.restore();
     }
 
     ctx.restore();
   }
 
   private drawFloatingTexts(ctx: CanvasRenderingContext2D): void {
+    const halfW = (this.viewport.width / (2 * this.camera.zoom)) + 60;
+    const halfH = (this.viewport.height / (2 * this.camera.zoom)) + 60;
+    const viewLeft = this.camera.x - halfW;
+    const viewRight = this.camera.x + halfW;
+    const viewTop = this.camera.y - halfH;
+    const viewBottom = this.camera.y + halfH;
+
+    ctx.textAlign = 'center';
+    let lastScale = -1;
+
     for (let i = 0; i < this.floatingTexts.length; i++) {
       const t = this.floatingTexts[i];
-      ctx.save();
+      if (t.x < viewLeft || t.x > viewRight || t.y < viewTop || t.y > viewBottom) continue;
+
       ctx.globalAlpha = Math.max(0, t.alpha);
-      ctx.font = `bold ${Math.round(20 * t.scale)}px sans-serif`;
-      ctx.textAlign = 'center';
+      if (t.scale !== lastScale) {
+        ctx.font = `bold ${Math.round(20 * t.scale)}px sans-serif`;
+        lastScale = t.scale;
+      }
       ctx.fillStyle = t.color;
       ctx.fillText(t.text, t.x, t.y);
-      ctx.restore();
     }
+    ctx.globalAlpha = 1.0;
   }
 }
