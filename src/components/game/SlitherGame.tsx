@@ -2,7 +2,8 @@
 
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { GameEngine } from '@/game/engine';
-import { GameStats, PlayerPresence } from '@/game/types';
+import { GameStats, PlayerPresence, ChatMessage } from '@/game/types';
+import { sound } from '@/game/audio';
 import { StartScreen } from './StartScreen';
 import { GameHUD } from './GameHUD';
 import { GameOverModal } from './GameOverModal';
@@ -53,6 +54,58 @@ export const SlitherGame: React.FC = () => {
 
   const currentRoom = useMemo(() => getArenaRoom(roomId), [roomId]);
   const { publishPresence, peers, user } = db.rooms.usePresence(currentRoom);
+
+  // In-Game Multiplayer Chat state & InstantDB Room Topic pub/sub
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [isChatOpen, setIsChatOpen] = useState(false);
+
+  const publishChat = db.rooms.usePublishTopic(currentRoom, 'chat');
+
+  db.rooms.useTopicEffect(currentRoom, 'chat', (event: ChatMessage) => {
+    if (!event || !event.text) return;
+    setChatMessages((prev) => {
+      if (prev.some((m) => m.id === event.id)) return prev;
+      return [...prev.slice(-49), event];
+    });
+    sound.playChat();
+    if (engineRef.current && event.senderId) {
+      engineRef.current.addChatMessage(event.senderId, event.text, event.senderName);
+    }
+  });
+
+  const handleSendMessage = useCallback(
+    (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+
+      const player = engineRef.current?.player;
+      const myName = player?.name || lastPlayerConfig.name || 'QuantumViper';
+      const myId = playerIdRef.current;
+
+      const msg: ChatMessage = {
+        id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+        senderId: myId,
+        senderName: myName,
+        text: trimmed,
+        timestamp: Date.now(),
+        isPlayer: true,
+      };
+
+      setChatMessages((prev) => [...prev.slice(-49), msg]);
+      sound.playChat();
+
+      if (engineRef.current) {
+        engineRef.current.addChatMessage(myId, trimmed, myName);
+      }
+
+      try {
+        publishChat(msg);
+      } catch (err) {
+        console.error('Failed to broadcast chat transmission:', err);
+      }
+    },
+    [publishChat, lastPlayerConfig.name]
+  );
 
   const peerCount = Object.keys(peers || {}).length;
   const onlineCount = peerCount + (gameState === 'playing' ? 1 : 0);
@@ -435,14 +488,46 @@ export const SlitherGame: React.FC = () => {
     lastPinchDistRef.current = null;
   }, []);
 
-  // Keyboard handlers (Space to boost)
+  // Keyboard handlers (Space to boost, Enter to open chat)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const activeEl = document.activeElement;
+      const isTyping =
+        activeEl &&
+        (activeEl.tagName === 'INPUT' ||
+          activeEl.tagName === 'TEXTAREA' ||
+          (activeEl as HTMLElement).isContentEditable);
+
+      if (isTyping) {
+        return;
+      }
+
       if (e.code === 'Space' && engineRef.current) {
         engineRef.current.isSpaceDown = true;
+        return;
+      }
+
+      // Enter key opens chat input when playing
+      if ((e.key === 'Enter' || e.code === 'Enter') && gameState === 'playing') {
+        e.preventDefault();
+        if (activeEl instanceof HTMLElement) {
+          activeEl.blur();
+        }
+        setIsChatOpen(true);
       }
     };
     const handleKeyUp = (e: KeyboardEvent) => {
+      const activeEl = document.activeElement;
+      const isTyping =
+        activeEl &&
+        (activeEl.tagName === 'INPUT' ||
+          activeEl.tagName === 'TEXTAREA' ||
+          (activeEl as HTMLElement).isContentEditable);
+
+      if (isTyping) {
+        return;
+      }
+
       if (e.code === 'Space' && engineRef.current) {
         engineRef.current.isSpaceDown = false;
       }
@@ -454,12 +539,17 @@ export const SlitherGame: React.FC = () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, []);
+  }, [gameState]);
 
   const startGame = (name: string, skinId: string) => {
     setLastPlayerConfig({ name, skinId });
     const engine = engineRef.current;
     if (!engine) return;
+
+    if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+    canvasRef.current?.focus();
 
     handleResize();
     engine.start(name, skinId, playerIdRef.current);
@@ -485,10 +575,21 @@ export const SlitherGame: React.FC = () => {
       {/* Interactive Fullscreen Canvas */}
       <canvas
         ref={canvasRef}
+        tabIndex={0}
         onMouseMove={handleMouseMove}
-        onMouseDown={handleMouseDown}
+        onMouseDown={(e) => {
+          if (isChatOpen) {
+            setIsChatOpen(false);
+          }
+          handleMouseDown(e);
+        }}
         onMouseUp={handleMouseUp}
-        onTouchStart={handleTouchStart}
+        onTouchStart={(e) => {
+          if (isChatOpen) {
+            setIsChatOpen(false);
+          }
+          handleTouchStart(e);
+        }}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
         className="block w-full h-full cursor-crosshair touch-none"
@@ -510,6 +611,10 @@ export const SlitherGame: React.FC = () => {
           engine={engineRef.current}
           onlineCount={onlineCount}
           roomId={roomId}
+          chatMessages={chatMessages}
+          isChatOpen={isChatOpen}
+          onChatOpenChange={setIsChatOpen}
+          onSendMessage={handleSendMessage}
           onBoostStart={() => {
             if (engineRef.current) engineRef.current.isMouseDown = true;
           }}

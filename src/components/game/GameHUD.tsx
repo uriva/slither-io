@@ -5,6 +5,8 @@ import { GameEngine } from '@/game/engine';
 import { Minimap } from './Minimap';
 import { sound } from '@/game/audio';
 import { MIN_BOOST_MASS } from '@/game/constants';
+import { ChatMessage } from '@/game/types';
+import { ChatOverlay } from './ChatOverlay';
 import { Volume2, VolumeX, Trophy, Zap, Skull, Shield, Compass, ZoomIn, ZoomOut, Mouse, Users, Activity } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
@@ -12,6 +14,10 @@ interface GameHUDProps {
   engine: GameEngine;
   onlineCount: number;
   roomId?: string;
+  chatMessages: ChatMessage[];
+  isChatOpen: boolean;
+  onChatOpenChange: (open: boolean) => void;
+  onSendMessage: (text: string) => void;
   onBoostStart: () => void;
   onBoostEnd: () => void;
   onZoomIn: () => void;
@@ -23,6 +29,10 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   engine,
   onlineCount,
   roomId,
+  chatMessages,
+  isChatOpen,
+  onChatOpenChange,
+  onSendMessage,
   onBoostStart,
   onBoostEnd,
   onZoomIn,
@@ -167,8 +177,18 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
       {/* Bottom Row */}
       <div className="flex justify-between items-end gap-4 mt-auto">
-        {/* Bottom-Left: Control Guide, Audio Toggle, & Zoom Buttons */}
+        {/* Bottom-Left: Chat, Control Guide, Audio Toggle, & Zoom Buttons */}
         <div className="flex flex-col gap-2 pointer-events-auto">
+          {/* In-Game Multiplayer Chat Overlay */}
+          <ChatOverlay
+            messages={chatMessages}
+            isOpen={isChatOpen}
+            onOpenChange={onChatOpenChange}
+            onSendMessage={onSendMessage}
+            playerName={player.name}
+            isTouchDevice={isTouchDevice}
+          />
+
           <div className="flex items-center gap-2">
             <Button
               variant="outline"

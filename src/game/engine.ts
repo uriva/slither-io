@@ -684,8 +684,33 @@ export class GameEngine {
     }
   }
 
+  public addChatMessage(snakeId: string, text: string, senderName?: string): void {
+    let target = this.snakes.find((s) => s.id === snakeId);
+    if (!target && this.player && (this.player.id === snakeId || this.player.name === senderName)) {
+      target = this.player;
+    }
+    if (!target && senderName) {
+      target = this.snakes.find((s) => s.name === senderName);
+    }
+    if (target) {
+      target.chatMessage = text;
+      target.chatTimer = 260; // ~4.3 seconds at 60fps
+    }
+  }
+
   public update(dt: number): void {
     this.gameTime++;
+
+    // Decrement chat bubble timers
+    for (let i = 0; i < this.snakes.length; i++) {
+      const snake = this.snakes[i];
+      if (snake.chatTimer && snake.chatTimer > 0) {
+        snake.chatTimer--;
+        if (snake.chatTimer <= 0) {
+          snake.chatMessage = undefined;
+        }
+      }
+    }
 
     if (this.player && !this.player.isDead) {
       this.stats.timeAlive += dt / 1000;
@@ -1706,6 +1731,86 @@ export class GameEngine {
       ctx.fillStyle = `rgba(0, 240, 255, ${shieldPulse * 0.15})`;
       ctx.fill();
     }
+
+    // 9. Draw In-Game Chat Speech Bubble
+    if (snake.chatMessage && snake.chatTimer && snake.chatTimer > 0) {
+      this.drawChatBubble(ctx, snake, isTopLeader);
+    }
+
+    ctx.restore();
+  }
+
+  private drawChatBubble(ctx: CanvasRenderingContext2D, snake: Snake, isTopLeader: boolean): void {
+    const text = snake.chatMessage;
+    if (!text) return;
+    const displayText = text.length > 38 ? text.slice(0, 36) + '…' : text;
+
+    const head = snake.head;
+    const alpha = snake.chatTimer && snake.chatTimer < 30 ? snake.chatTimer / 30 : 1.0;
+
+    const fontSize = Math.max(12, Math.min(15, snake.radius * 0.72));
+    ctx.font = `bold ${fontSize}px system-ui, -apple-system, sans-serif`;
+    const textMetrics = ctx.measureText(displayText);
+
+    const padX = 10;
+    const padY = 5;
+    const bubbleW = Math.max(50, textMetrics.width + padX * 2);
+    const bubbleH = fontSize + padY * 2;
+
+    const nameTagOffset = snake.radius * 1.5 + (isTopLeader ? 24 : 10) + fontSize;
+    const bubbleY = head.y - nameTagOffset - bubbleH;
+    const bubbleX = head.x - bubbleW / 2;
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+
+    // Background bubble with glow
+    ctx.fillStyle = 'rgba(6, 7, 12, 0.92)';
+    if (snake.isPlayer) {
+      ctx.strokeStyle = 'rgba(0, 240, 255, 0.85)';
+      ctx.shadowColor = 'rgba(0, 240, 255, 0.4)';
+      ctx.shadowBlur = 8;
+    } else if (snake.isRemoteHuman) {
+      ctx.strokeStyle = 'rgba(255, 0, 170, 0.85)';
+      ctx.shadowColor = 'rgba(255, 0, 170, 0.4)';
+      ctx.shadowBlur = 8;
+    } else {
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.65)';
+      ctx.shadowColor = 'rgba(255, 255, 255, 0.2)';
+      ctx.shadowBlur = 6;
+    }
+    ctx.lineWidth = 1.5;
+
+    // Rounded rectangle bubble
+    const r = 8;
+    ctx.beginPath();
+    ctx.moveTo(bubbleX + r, bubbleY);
+    ctx.lineTo(bubbleX + bubbleW - r, bubbleY);
+    ctx.quadraticCurveTo(bubbleX + bubbleW, bubbleY, bubbleX + bubbleW, bubbleY + r);
+    ctx.lineTo(bubbleX + bubbleW, bubbleY + bubbleH - r);
+    ctx.quadraticCurveTo(bubbleX + bubbleW, bubbleY + bubbleH, bubbleX + bubbleW - r, bubbleY + bubbleH);
+
+    // Downward arrow pointer to head
+    const midX = head.x;
+    ctx.lineTo(midX + 5, bubbleY + bubbleH);
+    ctx.lineTo(midX, bubbleY + bubbleH + 6);
+    ctx.lineTo(midX - 5, bubbleY + bubbleH);
+
+    ctx.lineTo(bubbleX + r, bubbleY + bubbleH);
+    ctx.quadraticCurveTo(bubbleX, bubbleY + bubbleH, bubbleX, bubbleY + bubbleH - r);
+    ctx.lineTo(bubbleX, bubbleY + r);
+    ctx.quadraticCurveTo(bubbleX, bubbleY, bubbleX + r, bubbleY);
+    ctx.closePath();
+
+    ctx.fill();
+    ctx.stroke();
+
+    // Reset shadow for text clarity
+    ctx.shadowBlur = 0;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(displayText, head.x, bubbleY + bubbleH / 2);
 
     ctx.restore();
   }

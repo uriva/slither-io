@@ -52,6 +52,8 @@ export interface Snake {
   aiTimer?: number;
   aiState?: 'wander' | 'eat' | 'attack' | 'flee';
   aiTarget?: Point | null;
+  chatMessage?: string;
+  chatTimer?: number;
 }
 
 export interface Orb {
@@ -131,3 +133,13 @@ export interface PlayerPresence {
   body: { x: number; y: number; radius: number }[];
   updatedAt: number;
 }
+
+export interface ChatMessage {
+  id: string;
+  senderId: string;
+  senderName: string;
+  text: string;
+  timestamp: number;
+  isPlayer?: boolean;
+}
+
