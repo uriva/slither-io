@@ -11,6 +11,7 @@ import {
 } from './types';
 import {
   ARENA_RADIUS,
+  ARENA_RADIUS_SQ,
   INITIAL_SNAKE_LENGTH,
   BASE_RADIUS,
   MAX_RADIUS,
@@ -31,8 +32,8 @@ import { BotAIController } from './botAI';
 import { sound } from './audio';
 
 interface BodySegmentItem extends GridItem {
-  snakeId: string;
-  segmentIndex: number;
+  snakeId?: string;
+  segmentIndex?: number;
 }
 
 export class GameEngine {
@@ -71,6 +72,9 @@ export class GameEngine {
   private orbQueryList: (Orb & GridItem)[] = [];
   private bodyQueryList: BodySegmentItem[] = [];
   private visibleOrbsList: (Orb & GridItem)[] = [];
+  private sortedSnakes: Snake[] = [];
+
+  public renderCtx: CanvasRenderingContext2D | null = null;
 
   // Pre-rendered sprite cache for high-performance orb drawing
   private orbSprites: HTMLCanvasElement[] = [];
@@ -100,6 +104,10 @@ export class GameEngine {
 
   public resetFrameTime(): void {
     this.lastFrameTime = performance.now();
+  }
+
+  public setRenderContext(ctx: CanvasRenderingContext2D | null): void {
+    this.renderCtx = ctx;
   }
 
   // Pre-render procedural background pattern once
@@ -376,6 +384,7 @@ export class GameEngine {
       radiance: radiance || (0.7 + Math.random() * 0.7),
       pulseSpeed: 0.02 + Math.random() * 0.045,
       pulsePhase: Math.random() * Math.PI * 2,
+      arrayIndex: this.orbs.length,
     };
     orb.gridKey = this.foodGrid.insert(orb as Orb & GridItem);
     this.orbs.push(orb);
@@ -400,6 +409,7 @@ export class GameEngine {
       preyAngle: Math.random() * Math.PI * 2,
       preySpeed: 2.6,
       pulsePhase: Math.random() * Math.PI * 2,
+      arrayIndex: this.orbs.length,
     };
     prey.gridKey = this.foodGrid.insert(prey as Orb & GridItem);
     this.orbs.push(prey);
@@ -454,7 +464,10 @@ export class GameEngine {
 
   private initBots(): void {
     const targetBots = BOT_COUNT;
-    const currentBots = this.snakes.filter((s) => !s.isPlayer).length;
+    let currentBots = 0;
+    for (let i = 0; i < this.snakes.length; i++) {
+      if (!this.snakes[i].isPlayer) currentBots++;
+    }
 
     for (let i = currentBots; i < targetBots; i++) {
       const name = BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)] + (i > 30 ? `${i}` : '');
@@ -473,7 +486,7 @@ export class GameEngine {
         attempts++;
       } while (
         this.player &&
-        Math.hypot(bx - this.player.head.x, by - this.player.head.y) < 800 &&
+        ((bx - this.player.head.x) * (bx - this.player.head.x) + (by - this.player.head.y) * (by - this.player.head.y) < 640000) &&
         attempts < 10
       );
 
@@ -489,6 +502,10 @@ export class GameEngine {
     this.lastFrameTime = time;
 
     this.update(dt);
+
+    if (this.renderCtx && !this.isGameOver) {
+      this.render(this.renderCtx);
+    }
 
     // Sync state with React HUD at 6Hz to eliminate React reconciliation overhead
     if (this.onStateUpdate && this.gameTime % 10 === 0) {
@@ -609,7 +626,7 @@ export class GameEngine {
       // Steering towards cursor in world coordinates
       const dx = this.mouseWorld.x - this.player.head.x;
       const dy = this.mouseWorld.y - this.player.head.y;
-      if (Math.hypot(dx, dy) > 20) {
+      if (dx * dx + dy * dy > 400) {
         this.player.targetAngle = Math.atan2(dy, dx);
       }
 
@@ -619,33 +636,34 @@ export class GameEngine {
       sound.setBoosting(wantsBoost);
     }
 
-    // Build Body Spatial Grid (zero string allocations)
+    // Build Body Spatial Grid (zero object allocations)
     this.bodyGrid.clear();
-    for (const snake of this.snakes) {
+    for (let s = 0; s < this.snakes.length; s++) {
+      const snake = this.snakes[s];
       if (snake.isDead) continue;
+      const body = snake.body;
+      const bodyLen = body.length;
       // Include neck (i = 1) so wider snakes physically shield their head in head-on collisions
-      for (let i = 1; i < snake.body.length; i++) {
-        const seg = snake.body[i];
-        this.bodyGrid.insert({
-          id: i,
-          x: seg.x,
-          y: seg.y,
-          radius: seg.radius,
-          snakeId: snake.id,
-          segmentIndex: i,
-        });
+      for (let i = 1; i < bodyLen; i++) {
+        const seg = body[i];
+        seg.id = i;
+        seg.snakeId = snake.id;
+        seg.segmentIndex = i;
+        this.bodyGrid.insert(seg as BodySegmentItem);
       }
     }
 
     // Update Bot AI
-    for (const snake of this.snakes) {
+    for (let i = 0; i < this.snakes.length; i++) {
+      const snake = this.snakes[i];
       if (!snake.isPlayer && !snake.isDead) {
         BotAIController.updateBot(snake, this.snakes, this.bodyGrid, this.foodGrid);
       }
     }
 
     // Update all snakes physics
-    for (const snake of this.snakes) {
+    for (let i = 0; i < this.snakes.length; i++) {
+      const snake = this.snakes[i];
       if (snake.isDead) continue;
       this.updateSnakePhysics(snake);
     }
@@ -663,7 +681,12 @@ export class GameEngine {
     this.updateFloatingText();
 
     // Maintain bot population
-    if (this.snakes.filter((s) => !s.isPlayer && !s.isDead).length < BOT_COUNT) {
+    let activeBots = 0;
+    for (let i = 0; i < this.snakes.length; i++) {
+      const s = this.snakes[i];
+      if (!s.isPlayer && !s.isDead) activeBots++;
+    }
+    if (activeBots < BOT_COUNT) {
       this.initBots();
     }
 
@@ -760,7 +783,10 @@ export class GameEngine {
 
     // 5. Body Segment Kinematics (Inverse Distance Constraint)
     const spacing = Math.max(7, snake.radius * 0.55);
-    snake.body[0] = { x: snake.head.x, y: snake.head.y, radius: snake.radius };
+    const spacingSq = spacing * spacing;
+    snake.body[0].x = snake.head.x;
+    snake.body[0].y = snake.head.y;
+    snake.body[0].radius = snake.radius;
 
     const bodyLen = snake.body.length;
     for (let i = 1; i < bodyLen; i++) {
@@ -769,9 +795,10 @@ export class GameEngine {
 
       const dx = prev.x - curr.x;
       const dy = prev.y - curr.y;
-      const dist = Math.hypot(dx, dy);
+      const distSq = dx * dx + dy * dy;
 
-      if (dist > spacing) {
+      if (distSq > spacingSq) {
+        const dist = Math.sqrt(distSq);
         const factor = (dist - spacing) / dist;
         curr.x += dx * factor;
         curr.y += dy * factor;
@@ -802,15 +829,16 @@ export class GameEngine {
       const orb = this.orbQueryList[i];
       const odx = snake.head.x - orb.x;
       const ody = snake.head.y - orb.y;
-      const odist = Math.hypot(odx, ody);
+      const odistSq = odx * odx + ody * ody;
 
       // Fireflies get more generous capture and magnetic suction
-      const effectiveEat = orb.isPrey ? eatRadius * 1.35 : eatRadius;
+      const effectiveEat = (orb.isPrey ? eatRadius * 1.35 : eatRadius) + orb.radius;
       const effectivePickup = orb.isPrey ? pickupRadius * 1.35 : pickupRadius;
 
-      if (odist <= effectiveEat + orb.radius) {
+      if (odistSq <= effectiveEat * effectiveEat) {
         this.eatOrb(snake, orb);
-      } else if (odist <= effectivePickup) {
+      } else if (odistSq <= effectivePickup * effectivePickup) {
+        const odist = Math.sqrt(odistSq);
         const pullFactor = 1 - odist / effectivePickup;
         const pullSpeed = pullFactor * (orb.isPrey ? 15 : 10);
         orb.x += (odx / odist) * pullSpeed;
@@ -820,11 +848,19 @@ export class GameEngine {
   }
 
   private eatOrb(snake: Snake, orb: Orb): void {
-    const idx = this.orbs.findIndex((o) => o.id === orb.id);
+    const idx = orb.arrayIndex !== undefined && this.orbs[orb.arrayIndex] === orb
+      ? orb.arrayIndex
+      : this.orbs.indexOf(orb);
     if (idx === -1) return;
 
     this.foodGrid.remove(orb as Orb & GridItem, orb.gridKey);
-    this.orbs.splice(idx, 1);
+
+    // O(1) swap-and-pop removal from orbs array
+    const lastOrb = this.orbs.pop()!;
+    if (idx < this.orbs.length) {
+      this.orbs[idx] = lastOrb;
+      lastOrb.arrayIndex = idx;
+    }
 
     const gain = orb.value;
     snake.score += gain * 2;
@@ -854,15 +890,16 @@ export class GameEngine {
   }
 
   private checkCollisions(): void {
-    for (const snake of this.snakes) {
+    for (let sIdx = 0; sIdx < this.snakes.length; sIdx++) {
+      const snake = this.snakes[sIdx];
       if (snake.isDead) continue;
       if (snake.invulnerableTimer > 0) continue; // Spawn protection
 
       const hx = snake.head.x;
       const hy = snake.head.y;
 
-      // 1. Arena Boundary Collision
-      if (Math.hypot(hx, hy) >= ARENA_RADIUS) {
+      // 1. Arena Boundary Collision (zero Math.hypot)
+      if (hx * hx + hy * hy >= ARENA_RADIUS_SQ) {
         this.killSnake(snake, 'Arena Barrier');
         continue;
       }
@@ -872,10 +909,11 @@ export class GameEngine {
         const other = this.snakes[j];
         if (other.id === snake.id || other.isDead || other.invulnerableTimer > 0) continue;
 
-        const headDist = Math.hypot(hx - other.head.x, hy - other.head.y);
+        const dhx = hx - other.head.x;
+        const dhy = hy - other.head.y;
         const contactRadius = (snake.radius + other.radius) * 0.82;
 
-        if (headDist < contactRadius) {
+        if (dhx * dhx + dhy * dhy < contactRadius * contactRadius) {
           const massDiff = snake.score - other.score;
           if (massDiff < -4) {
             // This snake is smaller -> dies!
@@ -921,8 +959,11 @@ export class GameEngine {
         const seg = this.bodyQueryList[i];
         if (seg.snakeId === snake.id) continue; // Cannot hit own body!
 
-        const dist = Math.hypot(hx - seg.x, hy - seg.y);
-        if (dist < snake.radius * 0.92 + seg.radius * 0.88) {
+        const dsx = hx - seg.x;
+        const dsy = hy - seg.y;
+        const maxDist = snake.radius * 0.92 + seg.radius * 0.88;
+
+        if (dsx * dsx + dsy * dsy < maxDist * maxDist) {
           const killer = this.snakes.find((s) => s.id === seg.snakeId);
           // Don't collide with shielded spawning snakes
           if (killer && killer.invulnerableTimer > 0) continue;
@@ -1007,6 +1048,9 @@ export class GameEngine {
 
   private updateOrbs(): void {
     const maxOrbDist = ARENA_RADIUS - 70;
+    const maxOrbDistSq = maxOrbDist * maxOrbDist;
+    const preyBoundaryDist = ARENA_RADIUS - 350;
+    const preyBoundaryDistSq = preyBoundaryDist * preyBoundaryDist;
 
     for (let i = this.orbs.length - 1; i >= 0; i--) {
       const orb = this.orbs[i];
@@ -1015,14 +1059,15 @@ export class GameEngine {
       if (orb.isPrey) {
         this.foodGrid.remove(orb as Orb & GridItem, orb.gridKey);
 
-        // Flee sprint from nearby snake heads
+        // Flee sprint from nearby snake heads (squared dist = zero Math.hypot)
         let fleeingFromSnake = false;
-        for (const snake of this.snakes) {
+        for (let s = 0; s < this.snakes.length; s++) {
+          const snake = this.snakes[s];
           if (snake.isDead) continue;
-          const d = Math.hypot(snake.head.x - orb.x, snake.head.y - orb.y);
-          if (d < 165) {
-            // Flee away with gentle erratic flutter wobble
-            const baseFleeAngle = Math.atan2(orb.y - snake.head.y, orb.x - snake.head.x);
+          const odx = snake.head.x - orb.x;
+          const ody = snake.head.y - orb.y;
+          if (odx * odx + ody * ody < 27225) { // 165 * 165
+            const baseFleeAngle = Math.atan2(-ody, -odx);
             orb.preyAngle = baseFleeAngle + Math.sin(this.gameTime * 0.2) * 0.3;
             orb.preySpeed = 4.7; // Easily catchable with boost (6.4 speed)
             fleeingFromSnake = true;
@@ -1040,8 +1085,7 @@ export class GameEngine {
         orb.y += Math.sin(orb.preyAngle!) * orb.preySpeed!;
 
         // Steer back inside if approaching boundary
-        const currentDist = Math.hypot(orb.x, orb.y);
-        if (currentDist > ARENA_RADIUS - 350) {
+        if (orb.x * orb.x + orb.y * orb.y > preyBoundaryDistSq) {
           orb.preyAngle = Math.atan2(-orb.y, -orb.x);
         }
 
@@ -1049,8 +1093,9 @@ export class GameEngine {
       }
 
       // Hard clamp so no orb can ever be outside the red circle
-      const dist = Math.hypot(orb.x, orb.y);
-      if (dist > maxOrbDist) {
+      const distSq = orb.x * orb.x + orb.y * orb.y;
+      if (distSq > maxOrbDistSq) {
+        const dist = Math.sqrt(distSq);
         orb.x = (orb.x / dist) * maxOrbDist;
         orb.y = (orb.y / dist) * maxOrbDist;
       }
@@ -1068,7 +1113,10 @@ export class GameEngine {
       p.alpha = 1 - p.life / p.maxLife;
 
       if (p.life >= p.maxLife) {
-        this.particles.splice(i, 1);
+        const last = this.particles.pop()!;
+        if (i < this.particles.length) {
+          this.particles[i] = last;
+        }
       }
     }
   }
@@ -1079,7 +1127,10 @@ export class GameEngine {
       t.y -= 1.2;
       t.alpha -= 0.02;
       if (t.alpha <= 0) {
-        this.floatingTexts.splice(i, 1);
+        const last = this.floatingTexts.pop()!;
+        if (i < this.floatingTexts.length) {
+          this.floatingTexts[i] = last;
+        }
       }
     }
 
@@ -1108,19 +1159,28 @@ export class GameEngine {
   }
 
   private updateLeaderboard(): void {
-    const activeSnakes = this.snakes.filter((s) => !s.isDead);
-    activeSnakes.sort((a, b) => b.score - a.score);
+    this.sortedSnakes.length = 0;
+    for (let i = 0; i < this.snakes.length; i++) {
+      const s = this.snakes[i];
+      if (!s.isDead) this.sortedSnakes.push(s);
+    }
+    this.sortedSnakes.sort((a, b) => b.score - a.score);
 
-    this.leaderboard = activeSnakes.slice(0, 10).map((s) => ({
-      id: s.id,
-      name: s.name,
-      score: Math.floor(s.score),
-      isPlayer: s.isPlayer,
-      color: s.skin.colors[0],
-    }));
+    const topCount = Math.min(10, this.sortedSnakes.length);
+    this.leaderboard.length = 0;
+    for (let i = 0; i < topCount; i++) {
+      const s = this.sortedSnakes[i];
+      this.leaderboard.push({
+        id: s.id,
+        name: s.name,
+        score: Math.floor(s.score),
+        isPlayer: s.isPlayer,
+        color: s.skin.colors[0],
+      });
+    }
 
     if (this.player && !this.player.isDead) {
-      const playerRank = activeSnakes.findIndex((s) => s.id === this.player?.id) + 1;
+      const playerRank = this.sortedSnakes.findIndex((s) => s.id === this.player?.id) + 1;
       if (playerRank > 0 && playerRank < this.stats.maxRank) {
         this.stats.maxRank = playerRank;
       }
@@ -1314,16 +1374,21 @@ export class GameEngine {
     const viewTop = this.camera.y - halfH;
     const viewBottom = this.camera.y + halfH;
 
-    const sortedSnakes = [...this.snakes].filter((s) => !s.isDead);
-    sortedSnakes.sort((a, b) => a.score - b.score);
+    this.sortedSnakes.length = 0;
+    for (let i = 0; i < this.snakes.length; i++) {
+      const s = this.snakes[i];
+      if (!s.isDead) this.sortedSnakes.push(s);
+    }
+    this.sortedSnakes.sort((a, b) => a.score - b.score);
 
-    for (const snake of sortedSnakes) {
+    for (let sIdx = 0; sIdx < this.sortedSnakes.length; sIdx++) {
+      const snake = this.sortedSnakes[sIdx];
       // Frustum culling: Skip snakes completely outside screen
       if (
-        snake.head.x < viewLeft && snake.body[snake.body.length - 1].x < viewLeft ||
-        snake.head.x > viewRight && snake.body[snake.body.length - 1].x > viewRight ||
-        snake.head.y < viewTop && snake.body[snake.body.length - 1].y < viewTop ||
-        snake.head.y > viewBottom && snake.body[snake.body.length - 1].y > viewBottom
+        (snake.head.x < viewLeft && snake.body[snake.body.length - 1].x < viewLeft) ||
+        (snake.head.x > viewRight && snake.body[snake.body.length - 1].x > viewRight) ||
+        (snake.head.y < viewTop && snake.body[snake.body.length - 1].y < viewTop) ||
+        (snake.head.y > viewBottom && snake.body[snake.body.length - 1].y > viewBottom)
       ) {
         let inView = false;
         for (let i = 0; i < snake.body.length; i += 8) {
@@ -1379,7 +1444,9 @@ export class GameEngine {
 
     // 3. Draw Decorative Segment Discs (LOD: when zoomed out, skip for distant snakes to save 2,500 draw calls)
     const isZoomedOut = this.camera.zoom < 0.68;
-    const isNearCamera = snake.isPlayer || snake.isRemoteHuman || Math.hypot(head.x - this.camera.x, head.y - this.camera.y) < 700;
+    const camDx = head.x - this.camera.x;
+    const camDy = head.y - this.camera.y;
+    const isNearCamera = snake.isPlayer || snake.isRemoteHuman || (camDx * camDx + camDy * camDy < 490000);
 
     if (!isZoomedOut || isNearCamera) {
       const drawStep = Math.max(1, Math.floor(snake.radius * (isZoomedOut ? 0.6 : 0.28)));

@@ -1,6 +1,7 @@
 import { SnakeSkin } from './types';
 
 export const ARENA_RADIUS = 10000;
+export const ARENA_RADIUS_SQ = ARENA_RADIUS * ARENA_RADIUS;
 export const INITIAL_SNAKE_LENGTH = 16;
 export const BASE_RADIUS = 13;
 export const MAX_RADIUS = 42;

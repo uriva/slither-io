@@ -283,6 +283,7 @@ export const SlitherGame: React.FC = () => {
         });
       }
 
+      engine.setRenderContext(ctxRef.current);
       engine.setViewport(canvas.width, canvas.height);
     };
 
@@ -309,38 +310,19 @@ export const SlitherGame: React.FC = () => {
     };
   }, [gameState]);
 
-  // Main Canvas Render Loop
-  useEffect(() => {
-    let animId: number;
-
-    const renderLoop = () => {
-      const engine = engineRef.current;
-      const ctx = ctxRef.current;
-
-      if (ctx && engine && gameState === 'playing') {
-        engine.render(ctx);
-      }
-
-      animId = requestAnimationFrame(renderLoop);
-    };
-
-    animId = requestAnimationFrame(renderLoop);
-    return () => cancelAnimationFrame(animId);
-  }, [gameState]);
-
-  // Mouse Input handlers
+  // Mouse Input handlers (zero object allocations & no getBoundingClientRect in hot loop)
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const engine = engineRef.current;
     if (!engine) return;
 
-    const rect = e.currentTarget.getBoundingClientRect();
-    const clientX = e.clientX - rect.left;
-    const clientY = e.clientY - rect.top;
+    const clientX = e.clientX;
+    const clientY = e.clientY;
 
     const worldX = (clientX - engine.viewport.width / 2) / engine.camera.zoom + engine.camera.x;
     const worldY = (clientY - engine.viewport.height / 2) / engine.camera.zoom + engine.camera.y;
 
-    engine.mouseWorld = { x: worldX, y: worldY };
+    engine.mouseWorld.x = worldX;
+    engine.mouseWorld.y = worldY;
   }, []);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -360,7 +342,7 @@ export const SlitherGame: React.FC = () => {
     if (e.touches.length === 2) {
       const dx = e.touches[0].clientX - e.touches[1].clientX;
       const dy = e.touches[0].clientY - e.touches[1].clientY;
-      lastPinchDistRef.current = Math.hypot(dx, dy);
+      lastPinchDistRef.current = Math.sqrt(dx * dx + dy * dy);
     }
   }, []);
 
@@ -371,7 +353,7 @@ export const SlitherGame: React.FC = () => {
     if (e.touches.length === 2 && lastPinchDistRef.current !== null) {
       const dx = e.touches[0].clientX - e.touches[1].clientX;
       const dy = e.touches[0].clientY - e.touches[1].clientY;
-      const dist = Math.hypot(dx, dy);
+      const dist = Math.sqrt(dx * dx + dy * dy);
       const delta = lastPinchDistRef.current - dist;
       engine.handleWheel(delta * 5);
       lastPinchDistRef.current = dist;
@@ -379,14 +361,14 @@ export const SlitherGame: React.FC = () => {
     }
 
     const touch = e.touches[0];
-    const rect = e.currentTarget.getBoundingClientRect();
-    const clientX = touch.clientX - rect.left;
-    const clientY = touch.clientY - rect.top;
+    const clientX = touch.clientX;
+    const clientY = touch.clientY;
 
     const worldX = (clientX - engine.viewport.width / 2) / engine.camera.zoom + engine.camera.x;
     const worldY = (clientY - engine.viewport.height / 2) / engine.camera.zoom + engine.camera.y;
 
-    engine.mouseWorld = { x: worldX, y: worldY };
+    engine.mouseWorld.x = worldX;
+    engine.mouseWorld.y = worldY;
   }, []);
 
   const handleTouchEnd = useCallback(() => {
@@ -425,7 +407,14 @@ export const SlitherGame: React.FC = () => {
     if (canvasRef.current) {
       canvasRef.current.width = Math.round(w * dpr);
       canvasRef.current.height = Math.round(h * dpr);
+      if (!ctxRef.current) {
+        ctxRef.current = canvasRef.current.getContext('2d', {
+          alpha: false,
+          desynchronized: true,
+        });
+      }
     }
+    engine.setRenderContext(ctxRef.current);
     engine.setViewport(canvasRef.current ? canvasRef.current.width : w, canvasRef.current ? canvasRef.current.height : h);
     engine.start(name, skinId, playerIdRef.current);
     setGameState('playing');

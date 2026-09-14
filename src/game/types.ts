@@ -4,9 +4,12 @@ export interface Point {
 }
 
 export interface Segment {
+  id?: string | number;
   x: number;
   y: number;
   radius: number;
+  snakeId?: string;
+  segmentIndex?: number;
 }
 
 export interface SnakeSkin {
@@ -59,6 +62,7 @@ export interface Orb {
   colorIndex: number;
   value: number;
   gridKey?: number;
+  arrayIndex?: number;
   radiance?: number; // Halo radiance factor (0.6 - 1.6)
   pulseSpeed?: number; // Individual shimmer speed
   vx?: number;

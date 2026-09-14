@@ -54,9 +54,41 @@ export class SpatialGrid<T extends GridItem> {
     if (list) {
       const idx = list.indexOf(item);
       if (idx !== -1) {
-        list.splice(idx, 1);
+        const last = list.pop()!;
+        if (idx < list.length) {
+          list[idx] = last;
+        }
       }
     }
+  }
+
+  public hasObstacle(x: number, y: number, range: number, excludeSnakeId: string): boolean {
+    const minCx = Math.floor((x - range) / this.cellSize);
+    const maxCx = Math.floor((x + range) / this.cellSize);
+    const minCy = Math.floor((y - range) / this.cellSize);
+    const maxCy = Math.floor((y + range) / this.cellSize);
+
+    for (let cx = minCx; cx <= maxCx; cx++) {
+      for (let cy = minCy; cy <= maxCy; cy++) {
+        const key = this.getKey(cx, cy);
+        const list = this.cells.get(key);
+        if (list) {
+          const len = list.length;
+          for (let i = 0; i < len; i++) {
+            const item = list[i] as unknown as { snakeId?: string; radius: number; x: number; y: number };
+            if (item.snakeId !== excludeSnakeId) {
+              const dx = item.x - x;
+              const dy = item.y - y;
+              const totalR = range + item.radius;
+              if (dx * dx + dy * dy <= totalR * totalR) {
+                return true;
+              }
+            }
+          }
+        }
+      }
+    }
+    return false;
   }
 
   public query(x: number, y: number, range: number): T[] {

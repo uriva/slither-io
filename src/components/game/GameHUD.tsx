@@ -41,7 +41,10 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   if (!player) return null;
 
   const playerRank = engine.leaderboard.findIndex((e) => e.isPlayer) + 1;
-  const totalSnakes = engine.snakes.filter((s) => !s.isDead).length;
+  let totalSnakes = 0;
+  for (let i = 0; i < engine.snakes.length; i++) {
+    if (!engine.snakes[i].isDead) totalSnakes++;
+  }
   const currentZoomPercent = Math.round(engine.camera.userZoom * 100);
   const canBoost = player.score > MIN_BOOST_MASS;
 
