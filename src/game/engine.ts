@@ -928,7 +928,7 @@ export class GameEngine {
 
         const dhx = hx - other.head.x;
         const dhy = hy - other.head.y;
-        const contactRadius = (snake.radius + other.radius) * 0.82;
+        const contactRadius = (snake.radius + other.radius) * 0.72;
 
         if (dhx * dhx + dhy * dhy < contactRadius * contactRadius) {
           const massDiff = snake.score - other.score;
@@ -968,9 +968,12 @@ export class GameEngine {
 
       if (snake.isDead) continue;
 
-      // 3. Head-to-Body Collision with other snakes
+      // 3. Head-to-Body Collision with other snakes (authentic forgiving Slither.io inner core physics)
       this.bodyQueryList.length = 0;
-      this.bodyGrid.queryInto(hx, hy, snake.radius * 2.0, this.bodyQueryList);
+      this.bodyGrid.queryInto(hx, hy, snake.radius * 1.8, this.bodyQueryList);
+
+      const cosAngle = Math.cos(snake.angle);
+      const sinAngle = Math.sin(snake.angle);
 
       for (let i = 0; i < this.bodyQueryList.length; i++) {
         const seg = this.bodyQueryList[i];
@@ -978,7 +981,28 @@ export class GameEngine {
 
         const dsx = hx - seg.x;
         const dsy = hy - seg.y;
-        const maxDist = snake.radius * 0.92 + seg.radius * 0.88;
+
+        // Slither.io Inner Core Hitbox:
+        // Visual head is ~1.15r, visual body is 1.0r.
+        // True core collision radius is 0.65r + 0.60r so grazing/sliding along flanks doesn't trigger death!
+        let headCoreR = snake.radius * 0.65;
+        let segCoreR = seg.radius * 0.60;
+
+        // Taper neck segments near opponent head so near-head coiling isn't prematurely clipped
+        if (seg.segmentIndex !== undefined && seg.segmentIndex <= 2) {
+          segCoreR *= 0.75;
+        }
+
+        // Glancing / Tangent Circling Forgiveness:
+        // If the snake is moving away or parallel to the segment (circling or skimming alongside),
+        // grant an extra 10% forgiving clearance margin.
+        const approachDot = -(dsx * cosAngle + dsy * sinAngle);
+        if (approachDot <= 0) {
+          headCoreR *= 0.90;
+          segCoreR *= 0.90;
+        }
+
+        const maxDist = headCoreR + segCoreR;
 
         if (dsx * dsx + dsy * dsy < maxDist * maxDist) {
           const killer = this.snakes.find((s) => s.id === seg.snakeId);
