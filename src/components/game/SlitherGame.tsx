@@ -15,6 +15,19 @@ export const SlitherGame: React.FC = () => {
   const workerRef = useRef<Worker | null>(null);
   const lastPinchDistRef = useRef<number | null>(null);
 
+  // Unique player ID per browser session/tab so multiple tabs see each other as distinct players
+  const playerIdRef = useRef<string>(
+    typeof window !== 'undefined'
+      ? sessionStorage.getItem('slither_pid') || `user-${Math.random().toString(36).substring(2, 9)}`
+      : `user-${Math.random().toString(36).substring(2, 9)}`
+  );
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('slither_pid', playerIdRef.current);
+    }
+  }, []);
+
   const [gameState, setGameState] = useState<'menu' | 'playing' | 'gameover'>('menu');
   const [highScore, setHighScore] = useState<number>(0);
   const [isNewHighScore, setIsNewHighScore] = useState(false);
@@ -397,7 +410,7 @@ export const SlitherGame: React.FC = () => {
       canvasRef.current.height = Math.round(h * dpr);
     }
     engine.setViewport(canvasRef.current ? canvasRef.current.width : w, canvasRef.current ? canvasRef.current.height : h);
-    engine.start(name, skinId);
+    engine.start(name, skinId, playerIdRef.current);
     setGameState('playing');
   };
 

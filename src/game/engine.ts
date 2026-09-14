@@ -240,7 +240,7 @@ export class GameEngine {
     this.viewport.height = height;
   }
 
-  public start(playerName: string, skinId: string): void {
+  public start(playerName: string, skinId: string, playerId?: string): void {
     this.stop();
     sound.init();
     this.isGameOver = false;
@@ -257,8 +257,10 @@ export class GameEngine {
     const px = Math.cos(playerStartAngle) * startDist;
     const py = Math.sin(playerStartAngle) * startDist;
 
+    const uniqueId = playerId || `user-${Math.random().toString(36).substring(2, 9)}`;
+
     this.player = this.createSnake(
-      'player',
+      uniqueId,
       playerName.trim() || 'CosmicSerpent',
       true,
       selectedSkin,
