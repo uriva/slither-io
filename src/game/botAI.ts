@@ -14,7 +14,7 @@ const ARENA_DANGER_SQ = ARENA_DANGER_DIST * ARENA_DANGER_DIST;
 const ARENA_BOOST_DANGER_DIST = ARENA_RADIUS - 200;
 const ARENA_BOOST_DANGER_SQ = ARENA_BOOST_DANGER_DIST * ARENA_BOOST_DANGER_DIST;
 
-const WHISKER_ANGLES = [0, 0.45, -0.45, 0.9, -0.9, 1.4, -1.4];
+const WHISKER_ANGLES = [0, 0.45, -0.45, 0.9, -0.9, 1.4, -1.4, 1.9, -1.9, 2.4, -2.4];
 
 export class BotAIController {
   // Reusable query list to completely eliminate array allocations during food searches
@@ -46,10 +46,12 @@ export class BotAIController {
     // 2. Proactive Collision Avoidance (Forward "Whiskers" Raycast)
     const lookAheadDist = bot.radius * (bot.isBoosting ? 5.2 : 3.8);
 
-    // Broadphase check: If no foreign segments anywhere within lookahead range, skip all 21 whisker raycasts!
+    // Broadphase check: If no foreign segments anywhere within lookahead range, skip all whisker raycasts!
     if (bodyGrid.hasObstacle(headX, headY, lookAheadDist + 30, bot.id)) {
       let bestClearAngle: number | null = null;
       let urgentDanger = false;
+      let maxClearSteps = -1;
+      let bestClearanceAngle: number = bot.angle + Math.PI;
 
       for (let a = 0; a < WHISKER_ANGLES.length; a++) {
         const offset = WHISKER_ANGLES[a];
@@ -57,6 +59,7 @@ export class BotAIController {
         const cosA = Math.cos(rayAngle);
         const sinA = Math.sin(rayAngle);
         let clear = true;
+        let stepsCleared = 0;
 
         for (let step = 1; step <= 3; step++) {
           const checkDist = (lookAheadDist * step) / 3;
@@ -74,16 +77,21 @@ export class BotAIController {
             if (step === 1) urgentDanger = true;
             break;
           }
+          stepsCleared = step;
         }
 
         if (clear && bestClearAngle === null) {
           bestClearAngle = rayAngle;
         }
+        if (stepsCleared > maxClearSteps) {
+          maxClearSteps = stepsCleared;
+          bestClearanceAngle = rayAngle;
+        }
       }
 
-      // If danger detected, turn to clear path and release boost to turn tightly
-      if (urgentDanger || (bestClearAngle !== null && Math.abs(bestClearAngle - bot.angle) > 0.4)) {
-        bot.targetAngle = bestClearAngle !== null ? bestClearAngle : bot.angle + Math.PI * 0.75;
+      // If danger detected, steer to the clear path or the angle with maximum room, and release boost
+      if (urgentDanger || bestClearAngle !== null || maxClearSteps < 3) {
+        bot.targetAngle = bestClearAngle !== null ? bestClearAngle : bestClearanceAngle;
         bot.isBoosting = false;
         return;
       }
