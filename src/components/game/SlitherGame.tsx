@@ -12,6 +12,7 @@ export const SlitherGame: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
   const engineRef = useRef<GameEngine | null>(null);
+  const workerRef = useRef<Worker | null>(null);
   const lastPinchDistRef = useRef<number | null>(null);
 
   const [gameState, setGameState] = useState<'menu' | 'playing' | 'gameover'>('menu');
@@ -71,20 +72,12 @@ export const SlitherGame: React.FC = () => {
     if (gameState !== 'playing') return;
 
     const interval = setInterval(() => {
+      // If tab is visible, publish via normal interval (worker handles background)
+      if (document.hidden) return;
+
       const engine = engineRef.current;
       const player = engine?.player;
       if (!engine || !player || player.isDead) return;
-
-      // Sample key body points to keep network packet lightweight
-      const sampleStep = Math.max(1, Math.floor(player.body.length / 22));
-      const bodySamples: { x: number; y: number; radius: number }[] = [];
-      for (let i = 0; i < player.body.length; i += sampleStep) {
-        bodySamples.push({
-          x: Math.round(player.body[i].x),
-          y: Math.round(player.body[i].y),
-          radius: Math.round(player.body[i].radius),
-        });
-      }
 
       publishPresence({
         id: player.id,
@@ -98,12 +91,85 @@ export const SlitherGame: React.FC = () => {
         kills: player.kills,
         isBoosting: player.isBoosting,
         isDead: player.isDead,
-        body: bodySamples,
         updatedAt: Date.now(),
       });
     }, 55);
 
     return () => clearInterval(interval);
+  }, [gameState, publishPresence]);
+
+  // Background Web Worker heartbeat: keeps game & presence 100% active when tab is unfocused/hidden
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    try {
+      const workerCode = `
+        let timer = null;
+        self.onmessage = function(e) {
+          if (e.data === 'start') {
+            if (!timer) {
+              timer = setInterval(function() {
+                self.postMessage('tick');
+              }, 1000 / 25);
+            }
+          } else if (e.data === 'stop') {
+            if (timer) {
+              clearInterval(timer);
+              timer = null;
+            }
+          }
+        };
+      `;
+      const blob = new Blob([workerCode], { type: 'application/javascript' });
+      const workerUrl = URL.createObjectURL(blob);
+      const worker = new Worker(workerUrl);
+      workerRef.current = worker;
+
+      worker.onmessage = () => {
+        if (document.hidden && engineRef.current && gameState === 'playing') {
+          engineRef.current.update(40);
+
+          const player = engineRef.current.player;
+          if (player && !player.isDead) {
+            publishPresence({
+              id: player.id,
+              name: player.name,
+              skinId: player.skin.id,
+              head: { x: Math.round(player.head.x), y: Math.round(player.head.y) },
+              angle: Number(player.angle.toFixed(3)),
+              speed: Number(player.speed.toFixed(1)),
+              radius: Math.round(player.radius),
+              score: Math.round(player.score),
+              kills: player.kills,
+              isBoosting: player.isBoosting,
+              isDead: player.isDead,
+              updatedAt: Date.now(),
+            });
+          }
+        }
+      };
+
+      const onVisibilityChange = () => {
+        if (document.hidden) {
+          worker.postMessage('start');
+        } else {
+          worker.postMessage('stop');
+          if (engineRef.current) {
+            engineRef.current.resetFrameTime();
+          }
+        }
+      };
+
+      document.addEventListener('visibilitychange', onVisibilityChange);
+
+      return () => {
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+        worker.terminate();
+        URL.revokeObjectURL(workerUrl);
+      };
+    } catch {
+      // Background worker fallback
+    }
   }, [gameState, publishPresence]);
 
   // Load High Score

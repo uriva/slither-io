@@ -97,6 +97,10 @@ export class GameEngine {
     this.initOrbs();
   }
 
+  public resetFrameTime(): void {
+    this.lastFrameTime = performance.now();
+  }
+
   // Pre-render procedural background pattern once
   private initGridPattern(): void {
     if (typeof document === 'undefined') return;
@@ -524,19 +528,15 @@ export class GameEngine {
       remoteSnake.speed = peer.speed || remoteSnake.speed;
       remoteSnake.radius = peer.radius || remoteSnake.radius;
       remoteSnake.targetAngle = peer.angle;
+      remoteSnake.targetLength = Math.min(
+        220,
+        INITIAL_SNAKE_LENGTH + Math.floor(Math.sqrt(Math.max(0, remoteSnake.score)) * 3.2)
+      );
 
       // Smooth interpolation toward peer head position
       remoteSnake.head.x += (peer.head.x - remoteSnake.head.x) * 0.35;
       remoteSnake.head.y += (peer.head.y - remoteSnake.head.y) * 0.35;
       remoteSnake.angle = peer.angle;
-
-      if (peer.body && peer.body.length > 0) {
-        remoteSnake.body = peer.body.map((seg) => ({
-          x: seg.x,
-          y: seg.y,
-          radius: seg.radius || remoteSnake.radius,
-        }));
-      }
     }
   }
 
