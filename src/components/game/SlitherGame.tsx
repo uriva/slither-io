@@ -1,12 +1,12 @@
 'use client';
 
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { GameEngine } from '@/game/engine';
 import { GameStats, PlayerPresence } from '@/game/types';
 import { StartScreen } from './StartScreen';
 import { GameHUD } from './GameHUD';
 import { GameOverModal } from './GameOverModal';
-import { db, arenaRoom } from '@/lib/instant';
+import { db, getArenaRoom, SECTORS, MAX_PLAYERS_PER_ROOM } from '@/lib/instant';
 
 export const SlitherGame: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -21,12 +21,43 @@ export const SlitherGame: React.FC = () => {
   const [lastPlayerConfig, setLastPlayerConfig] = useState({ name: 'QuantumViper', skinId: 'void-dragon' });
   const [isTouchDevice, setIsTouchDevice] = useState(false);
 
+  // Dynamic Room partitioning: auto-balance to a new sector if room is full
+  const [roomId, setRoomId] = useState<string>('sector-alpha');
+  const [roomIndex, setRoomIndex] = useState<number>(0);
+
+  // Read URL query parameter ?room= if present (allows playing with friends in a custom room)
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const customRoom = params.get('room');
+      if (customRoom) {
+        setRoomId(customRoom.toLowerCase().trim());
+      }
+    }
+  }, []);
+
+  const currentRoom = useMemo(() => getArenaRoom(roomId), [roomId]);
+  const { publishPresence, peers } = db.rooms.usePresence(currentRoom);
+
+  const peerCount = Object.keys(peers || {}).length;
+  const onlineCount = peerCount + (gameState === 'playing' ? 1 : 0);
+
+  // Auto-route to a new room if the current room has reached maximum player capacity
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('room')) return; // Honor explicit custom room
+    }
+
+    if (peerCount >= MAX_PLAYERS_PER_ROOM && gameState === 'menu') {
+      const nextIdx = (roomIndex + 1) % SECTORS.length;
+      setRoomIndex(nextIdx);
+      setRoomId(SECTORS[nextIdx]);
+    }
+  }, [peerCount, roomIndex, gameState]);
+
   // Periodic state refresh for HUD
   const [, setTick] = useState(0);
-
-  // InstantDB shared multiplayer room presence
-  const { publishPresence, peers } = db.rooms.usePresence(arenaRoom);
-  const onlineCount = Object.keys(peers || {}).length + (gameState === 'playing' ? 1 : 0);
 
   // Sync peers into GameEngine
   useEffect(() => {
@@ -292,14 +323,14 @@ export const SlitherGame: React.FC = () => {
     const engine = engineRef.current;
     if (!engine) return;
 
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = Math.min(1.25, window.devicePixelRatio || 1);
     const w = window.innerWidth;
     const h = window.innerHeight;
     if (canvasRef.current) {
-      canvasRef.current.width = w * dpr;
-      canvasRef.current.height = h * dpr;
+      canvasRef.current.width = Math.round(w * dpr);
+      canvasRef.current.height = Math.round(h * dpr);
     }
-    engine.setViewport(w, h);
+    engine.setViewport(canvasRef.current ? canvasRef.current.width : w, canvasRef.current ? canvasRef.current.height : h);
     engine.start(name, skinId);
     setGameState('playing');
   };
@@ -331,7 +362,12 @@ export const SlitherGame: React.FC = () => {
 
       {/* Start Screen */}
       {gameState === 'menu' && (
-        <StartScreen onPlay={startGame} highScore={highScore} onlineCount={onlineCount} />
+        <StartScreen
+          onPlay={startGame}
+          highScore={highScore}
+          onlineCount={onlineCount}
+          roomId={roomId}
+        />
       )}
 
       {/* Active Game HUD */}
@@ -339,6 +375,7 @@ export const SlitherGame: React.FC = () => {
         <GameHUD
           engine={engineRef.current}
           onlineCount={onlineCount}
+          roomId={roomId}
           onBoostStart={() => {
             if (engineRef.current) engineRef.current.isMouseDown = true;
           }}

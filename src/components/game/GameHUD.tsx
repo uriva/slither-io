@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 interface GameHUDProps {
   engine: GameEngine;
   onlineCount: number;
+  roomId?: string;
   onBoostStart: () => void;
   onBoostEnd: () => void;
   onZoomIn: () => void;
@@ -21,6 +22,7 @@ interface GameHUDProps {
 export const GameHUD: React.FC<GameHUDProps> = ({
   engine,
   onlineCount,
+  roomId,
   onBoostStart,
   onBoostEnd,
   onZoomIn,
@@ -97,7 +99,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             <div className="flex items-center gap-1.5 pt-1 border-t border-white/5 text-[10px] font-mono text-emerald-400 font-semibold">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping inline-block" />
               <Users className="w-3 h-3 text-emerald-400 ml-0.5" />
-              <span>{onlineCount} {onlineCount === 1 ? 'Player' : 'Players'} in Shared Arena</span>
+              <span>{(roomId || 'sector-alpha').replace('-', ' ').toUpperCase()} ({onlineCount}/10 Humans)</span>
             </div>
           </div>
         </div>

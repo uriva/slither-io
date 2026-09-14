@@ -1,6 +1,6 @@
 import { SnakeSkin } from './types';
 
-export const ARENA_RADIUS = 5500;
+export const ARENA_RADIUS = 10000;
 export const INITIAL_SNAKE_LENGTH = 16;
 export const BASE_RADIUS = 13;
 export const MAX_RADIUS = 42;
@@ -10,10 +10,10 @@ export const TURN_SPEED = 0.075;
 export const BOOST_TURN_SPEED = 0.095;
 export const SEGMENT_SPACING = 8;
 export const MIN_BOOST_MASS = 32;
-export const INITIAL_FOOD_COUNT = 3000;
-export const MAX_FOOD_COUNT = 4500;
-export const PREY_COUNT = 25;
-export const BOT_COUNT = 40;
+export const INITIAL_FOOD_COUNT = 5500;
+export const MAX_FOOD_COUNT = 7500;
+export const PREY_COUNT = 45;
+export const BOT_COUNT = 55;
 
 export const SKINS: SnakeSkin[] = [
   {
