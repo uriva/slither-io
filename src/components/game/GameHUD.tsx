@@ -5,7 +5,7 @@ import { GameEngine } from '@/game/engine';
 import { Minimap } from './Minimap';
 import { sound } from '@/game/audio';
 import { MIN_BOOST_MASS } from '@/game/constants';
-import { Volume2, VolumeX, Trophy, Zap, Skull, Shield, Compass, ZoomIn, ZoomOut, Mouse, Users } from 'lucide-react';
+import { Volume2, VolumeX, Trophy, Zap, Skull, Shield, Compass, ZoomIn, ZoomOut, Mouse, Users, Activity } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 interface GameHUDProps {
@@ -47,6 +47,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   }
   const currentZoomPercent = Math.round(engine.camera.userZoom * 100);
   const canBoost = player.score > MIN_BOOST_MASS;
+  const fps = engine.fps || 60;
+  const fpsColor = fps >= 55 ? 'text-emerald-400 bg-emerald-500/20 border-emerald-500/30' : fps >= 40 ? 'text-amber-400 bg-amber-500/20 border-amber-500/30' : 'text-red-400 bg-red-500/20 border-red-500/30';
 
   return (
     <div className="absolute inset-0 pointer-events-none select-none z-10 flex flex-col justify-between p-4 md:p-6 font-sans">
@@ -60,9 +62,15 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 <Shield className="w-3.5 h-3.5" />
                 {player.name}
               </span>
-              <span className="text-xs font-mono font-semibold px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
-                #{playerRank > 0 ? playerRank : totalSnakes} / {totalSnakes}
-              </span>
+              <div className="flex items-center gap-1.5">
+                <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border flex items-center gap-1 ${fpsColor}`}>
+                  <Activity className="w-2.5 h-2.5" />
+                  {fps} FPS
+                </span>
+                <span className="text-xs font-mono font-semibold px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                  #{playerRank > 0 ? playerRank : totalSnakes} / {totalSnakes}
+                </span>
+              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-2 text-xs">
@@ -174,6 +182,10 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
             {/* Interactive Zoom Buttons */}
             <div className="flex items-center rounded-lg bg-slate-950/70 border border-white/10 backdrop-blur-md p-0.5">
+              <span className={`text-[10px] font-mono font-bold px-2 py-1 flex items-center gap-1 border-r border-white/10 ${fps >= 55 ? 'text-emerald-400' : fps >= 40 ? 'text-amber-400' : 'text-red-400'}`}>
+                <Activity className="w-3 h-3" />
+                {fps} FPS
+              </span>
               <Button
                 variant="ghost"
                 size="icon-sm"

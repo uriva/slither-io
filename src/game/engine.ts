@@ -88,6 +88,11 @@ export class GameEngine {
   private animFrameId: number | null = null;
   private lastFrameTime = 0;
 
+  // Real-time FPS monitoring
+  public fps: number = 60;
+  private fpsFrames: number = 0;
+  private fpsLastTime: number = 0;
+
   // Input states
   public mouseWorld: Point = { x: 0, y: 0 };
   public isMouseDown: boolean = false;
@@ -104,6 +109,8 @@ export class GameEngine {
 
   public resetFrameTime(): void {
     this.lastFrameTime = performance.now();
+    this.fpsLastTime = this.lastFrameTime;
+    this.fpsFrames = 0;
   }
 
   public setRenderContext(ctx: CanvasRenderingContext2D | null): void {
@@ -240,8 +247,8 @@ export class GameEngine {
   }
 
   public handleWheel(deltaY: number): void {
-    const zoomFactor = deltaY < 0 ? 1.10 : 0.91;
-    this.camera.userZoom = Math.max(0.55, Math.min(2.0, this.camera.userZoom * zoomFactor));
+    const zoomFactor = deltaY < 0 ? 1.09 : 0.92;
+    this.camera.userZoom = Math.max(0.65, Math.min(1.8, this.camera.userZoom * zoomFactor));
   }
 
   public setViewport(width: number, height: number): void {
@@ -500,6 +507,14 @@ export class GameEngine {
 
     const dt = Math.min(32, time - this.lastFrameTime);
     this.lastFrameTime = time;
+
+    // Rolling FPS calculation over 350ms window
+    this.fpsFrames++;
+    if (time - this.fpsLastTime >= 350) {
+      this.fps = Math.round((this.fpsFrames * 1000) / (time - this.fpsLastTime));
+      this.fpsFrames = 0;
+      this.fpsLastTime = time;
+    }
 
     this.update(dt);
 
@@ -1279,68 +1294,37 @@ export class GameEngine {
     const viewTop = this.camera.y - halfH;
     const viewBottom = this.camera.y + halfH;
 
-    const isZoomedOut = this.camera.zoom < 0.72;
-
     this.visibleOrbsList.length = 0;
     this.foodGrid.queryRectInto(viewLeft, viewRight, viewTop, viewBottom, this.visibleOrbsList);
 
-    if (isZoomedOut) {
-      // High-speed batched AABB quads: 0.9ms instead of 16.1ms (no heavy Skia bezier tessellations)
-      const orbCount = this.visibleOrbsList.length;
+    const hasSprites = this.orbSprites.length > 0;
+    const count = this.visibleOrbsList.length;
 
-      for (let c = 0; c < FOOD_COLORS.length; c++) {
-        const colorCfg = FOOD_COLORS[c];
-        ctx.fillStyle = colorCfg.color;
-        ctx.beginPath();
-        for (let i = 0; i < orbCount; i++) {
-          const orb = this.visibleOrbsList[i] as unknown as Orb;
-          if (orb.colorIndex === c && !orb.isPrey) {
-            const size = orb.radius * 2;
-            ctx.rect(orb.x - orb.radius, orb.y - orb.radius, size, size);
-          }
-        }
-        ctx.fill();
-      }
+    for (let i = 0; i < count; i++) {
+      const orb = this.visibleOrbsList[i] as unknown as Orb;
+      const pulse = 1 + Math.sin(orb.pulsePhase) * 0.12;
+      const r = orb.radius * pulse;
 
-      // Prey and custom drops
-      for (let i = 0; i < orbCount; i++) {
-        const orb = this.visibleOrbsList[i] as unknown as Orb;
+      if (hasSprites) {
         if (orb.isPrey && this.preySprite) {
-          ctx.drawImage(this.preySprite, orb.x - orb.radius * 1.5, orb.y - orb.radius * 1.5, orb.radius * 3, orb.radius * 3);
+          ctx.drawImage(this.preySprite, orb.x - r * 1.5, orb.y - r * 1.5, r * 3, r * 3);
         } else if (orb.colorIndex === -1) {
-          ctx.fillStyle = orb.color;
-          ctx.fillRect(orb.x - orb.radius, orb.y - orb.radius, orb.radius * 2, orb.radius * 2);
-        }
-      }
-    } else {
-      // ZOOMED IN: High-detail individual glowing sprites with specular glints
-      const hasSprites = this.orbSprites.length > 0;
-      for (let i = 0; i < this.visibleOrbsList.length; i++) {
-        const orb = this.visibleOrbsList[i] as unknown as Orb;
-        const pulse = 1 + Math.sin(orb.pulsePhase) * 0.12;
-        const r = orb.radius * pulse;
-
-        if (hasSprites) {
-          if (orb.isPrey && this.preySprite) {
-            ctx.drawImage(this.preySprite, orb.x - r * 1.5, orb.y - r * 1.5, r * 3, r * 3);
-          } else if (orb.colorIndex === -1) {
-            const sprite = this.getCustomOrbSprite(orb.color, orb.glowColor);
-            if (sprite) {
-              const glowMul = 1.35 + (orb.radiance || 1.0) * 0.25;
-              ctx.drawImage(sprite, orb.x - r * glowMul, orb.y - r * glowMul, r * (glowMul * 2), r * (glowMul * 2));
-            }
-          } else {
-            const sprite = this.orbSprites[orb.colorIndex || 0];
-            if (sprite) {
-              ctx.drawImage(sprite, orb.x - r * 1.4, orb.y - r * 1.4, r * 2.8, r * 2.8);
-            }
+          const sprite = this.getCustomOrbSprite(orb.color, orb.glowColor);
+          if (sprite) {
+            const glowMul = 1.35 + (orb.radiance || 1.0) * 0.25;
+            ctx.drawImage(sprite, orb.x - r * glowMul, orb.y - r * glowMul, r * (glowMul * 2), r * (glowMul * 2));
           }
         } else {
-          ctx.beginPath();
-          ctx.arc(orb.x, orb.y, r, 0, Math.PI * 2);
-          ctx.fillStyle = orb.color;
-          ctx.fill();
+          const sprite = this.orbSprites[orb.colorIndex || 0];
+          if (sprite) {
+            ctx.drawImage(sprite, orb.x - r * 1.4, orb.y - r * 1.4, r * 2.8, r * 2.8);
+          }
         }
+      } else {
+        ctx.beginPath();
+        ctx.arc(orb.x, orb.y, r, 0, Math.PI * 2);
+        ctx.fillStyle = orb.color;
+        ctx.fill();
       }
     }
   }

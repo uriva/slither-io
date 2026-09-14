@@ -236,19 +236,23 @@ export const SlitherGame: React.FC = () => {
     let lastScore = 0;
     let lastKills = 0;
     let lastBoost = false;
+    let lastFps = 0;
 
     engine.onStateUpdate = (eng) => {
       const p = eng.player;
       if (!p) return;
       const score = Math.floor(p.score);
+      const fps = eng.fps;
       if (
         score !== lastScore ||
         p.kills !== lastKills ||
-        p.isBoosting !== lastBoost
+        p.isBoosting !== lastBoost ||
+        fps !== lastFps
       ) {
         lastScore = score;
         lastKills = p.kills;
         lastBoost = p.isBoosting;
+        lastFps = fps;
         setTick((prev) => prev + 1);
       }
     };
