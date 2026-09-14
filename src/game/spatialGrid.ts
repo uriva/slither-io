@@ -90,4 +90,32 @@ export class SpatialGrid<T extends GridItem> {
       }
     }
   }
+
+  public queryRectInto(left: number, right: number, top: number, bottom: number, outResults: T[]): void {
+    const minCx = Math.floor(left / this.cellSize);
+    const maxCx = Math.floor(right / this.cellSize);
+    const minCy = Math.floor(top / this.cellSize);
+    const maxCy = Math.floor(bottom / this.cellSize);
+
+    for (let cx = minCx; cx <= maxCx; cx++) {
+      for (let cy = minCy; cy <= maxCy; cy++) {
+        const key = this.getKey(cx, cy);
+        const list = this.cells.get(key);
+        if (list) {
+          const len = list.length;
+          for (let i = 0; i < len; i++) {
+            const item = list[i];
+            if (
+              item.x >= left - item.radius &&
+              item.x <= right + item.radius &&
+              item.y >= top - item.radius &&
+              item.y <= bottom + item.radius
+            ) {
+              outResults.push(item);
+            }
+          }
+        }
+      }
+    }
+  }
 }

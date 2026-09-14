@@ -70,6 +70,7 @@ export class GameEngine {
   // Reusable query arrays to avoid garbage collection
   private orbQueryList: (Orb & GridItem)[] = [];
   private bodyQueryList: BodySegmentItem[] = [];
+  private visibleOrbsList: (Orb & GridItem)[] = [];
 
   // Pre-rendered sprite cache for high-performance orb drawing
   private orbSprites: HTMLCanvasElement[] = [];
@@ -1171,44 +1172,88 @@ export class GameEngine {
     const viewTop = this.camera.y - halfH;
     const viewBottom = this.camera.y + halfH;
 
-    const hasSprites = this.orbSprites.length > 0;
-    const maxDrawRadiusSq = (ARENA_RADIUS - 30) * (ARENA_RADIUS - 30);
+    const isZoomedOut = this.camera.zoom < 0.72;
 
-    for (let i = 0; i < this.orbs.length; i++) {
-      const orb = this.orbs[i];
-      if (orb.x < viewLeft || orb.x > viewRight || orb.y < viewTop || orb.y > viewBottom) {
-        continue;
-      }
-      // Never draw food pellets outside the red barrier circle
-      if (orb.x * orb.x + orb.y * orb.y > maxDrawRadiusSq) {
-        continue;
-      }
+    this.visibleOrbsList.length = 0;
+    this.foodGrid.queryRectInto(viewLeft, viewRight, viewTop, viewBottom, this.visibleOrbsList);
 
-      const pulse = 1 + Math.sin(orb.pulsePhase) * 0.12;
-      const r = orb.radius * pulse;
-
-      if (hasSprites) {
-        if (orb.isPrey && this.preySprite) {
-          ctx.drawImage(this.preySprite, orb.x - r * 1.5, orb.y - r * 1.5, r * 3, r * 3);
-        } else if (orb.colorIndex === -1) {
-          // Hardware-accelerated custom orb matching snake's skin color!
-          const sprite = this.getCustomOrbSprite(orb.color, orb.glowColor);
-          if (sprite) {
-            const glowMul = 1.35 + (orb.radiance || 1.0) * 0.25;
-            ctx.drawImage(sprite, orb.x - r * glowMul, orb.y - r * glowMul, r * (glowMul * 2), r * (glowMul * 2));
-          }
-        } else {
-          const sprite = this.orbSprites[orb.colorIndex || 0];
-          if (sprite) {
-            ctx.drawImage(sprite, orb.x - r * 1.4, orb.y - r * 1.4, r * 2.8, r * 2.8);
+    if (isZoomedOut) {
+      // 180x SPEEDUP: Batch visible orbs by color into unified Canvas paths (8 draw calls instead of 1,500)
+      // Pass 1: Soft glowing halos
+      ctx.save();
+      ctx.globalAlpha = 0.28;
+      for (let c = 0; c < FOOD_COLORS.length; c++) {
+        const colorCfg = FOOD_COLORS[c];
+        ctx.fillStyle = colorCfg.color;
+        ctx.beginPath();
+        for (let i = 0; i < this.visibleOrbsList.length; i++) {
+          const orb = this.visibleOrbsList[i] as unknown as Orb;
+          if (orb.colorIndex === c && !orb.isPrey) {
+            const r = orb.radius * 1.5;
+            ctx.moveTo(orb.x + r, orb.y);
+            ctx.arc(orb.x, orb.y, r, 0, Math.PI * 2);
           }
         }
-      } else {
-        // Fallback if sprites not initialized
-        ctx.beginPath();
-        ctx.arc(orb.x, orb.y, r, 0, Math.PI * 2);
-        ctx.fillStyle = orb.color;
         ctx.fill();
+      }
+      ctx.restore();
+
+      // Pass 2: Solid core spheres
+      for (let c = 0; c < FOOD_COLORS.length; c++) {
+        const colorCfg = FOOD_COLORS[c];
+        ctx.fillStyle = colorCfg.color;
+        ctx.beginPath();
+        for (let i = 0; i < this.visibleOrbsList.length; i++) {
+          const orb = this.visibleOrbsList[i] as unknown as Orb;
+          if (orb.colorIndex === c && !orb.isPrey) {
+            ctx.moveTo(orb.x + orb.radius, orb.y);
+            ctx.arc(orb.x, orb.y, orb.radius, 0, Math.PI * 2);
+          }
+        }
+        ctx.fill();
+      }
+
+      // Pass 3: Custom snake color drops & rare preys
+      for (let i = 0; i < this.visibleOrbsList.length; i++) {
+        const orb = this.visibleOrbsList[i] as unknown as Orb;
+        if (orb.isPrey && this.preySprite) {
+          ctx.drawImage(this.preySprite, orb.x - orb.radius * 1.5, orb.y - orb.radius * 1.5, orb.radius * 3, orb.radius * 3);
+        } else if (orb.colorIndex === -1) {
+          ctx.fillStyle = orb.color;
+          ctx.beginPath();
+          ctx.arc(orb.x, orb.y, orb.radius, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    } else {
+      // ZOOMED IN: High-detail individual glowing sprites with specular glints
+      const hasSprites = this.orbSprites.length > 0;
+      for (let i = 0; i < this.visibleOrbsList.length; i++) {
+        const orb = this.visibleOrbsList[i] as unknown as Orb;
+        const pulse = 1 + Math.sin(orb.pulsePhase) * 0.12;
+        const r = orb.radius * pulse;
+
+        if (hasSprites) {
+          if (orb.isPrey && this.preySprite) {
+            ctx.drawImage(this.preySprite, orb.x - r * 1.5, orb.y - r * 1.5, r * 3, r * 3);
+          } else if (orb.colorIndex === -1) {
+            const sprite = this.getCustomOrbSprite(orb.color, orb.glowColor);
+            if (sprite) {
+              const glowMul = 1.35 + (orb.radiance || 1.0) * 0.25;
+              ctx.drawImage(sprite, orb.x - r * glowMul, orb.y - r * glowMul, r * (glowMul * 2), r * (glowMul * 2));
+            }
+          } else {
+            const sprite = this.orbSprites[orb.colorIndex || 0];
+            if (sprite) {
+              ctx.drawImage(sprite, orb.x - r * 1.4, orb.y - r * 1.4, r * 2.8, r * 2.8);
+            }
+          }
+        } else {
+          ctx.beginPath();
+          ctx.arc(orb.x, orb.y, r, 0, Math.PI * 2);
+          ctx.fillStyle = orb.color;
+          ctx.fill();
+        }
       }
     }
   }
@@ -1264,6 +1309,7 @@ export class GameEngine {
     const skin = snake.skin;
     const bodyLen = snake.body.length;
     if (bodyLen === 0) return;
+    const head = snake.head;
 
     ctx.save();
 
@@ -1296,38 +1342,44 @@ export class GameEngine {
     ctx.strokeStyle = skin.colors[0];
     ctx.stroke();
 
-    // 3. Draw Decorative Segment Discs with optimal stride (no redundant overdraw)
-    const drawStep = Math.max(1, Math.floor(snake.radius * 0.28));
-    for (let i = bodyLen - 1; i >= 1; i -= drawStep) {
-      const seg = snake.body[i];
+    // 3. Draw Decorative Segment Discs (LOD: when zoomed out, skip for distant snakes to save 2,500 draw calls)
+    const isZoomedOut = this.camera.zoom < 0.68;
+    const isNearCamera = snake.isPlayer || snake.isRemoteHuman || Math.hypot(head.x - this.camera.x, head.y - this.camera.y) < 700;
 
-      let segColor = skin.colors[0];
-      if (skin.pattern === 'stripes') {
-        segColor = skin.colors[i % skin.colors.length];
-      } else if (skin.pattern === 'gradient') {
-        const colorIdx = Math.floor((i / bodyLen) * skin.colors.length) % skin.colors.length;
-        segColor = skin.colors[colorIdx];
-      } else if (skin.pattern === 'segmented') {
-        segColor = Math.floor(i / 3) % 2 === 0 ? skin.colors[0] : skin.colors[1] || skin.colors[0];
-      } else if (skin.pattern === 'pulse') {
-        const p = Math.floor((i + this.gameTime * 0.2) % skin.colors.length);
-        segColor = skin.colors[p];
+    if (!isZoomedOut || isNearCamera) {
+      const drawStep = Math.max(1, Math.floor(snake.radius * (isZoomedOut ? 0.6 : 0.28)));
+      for (let i = bodyLen - 1; i >= 1; i -= drawStep) {
+        const seg = snake.body[i];
+
+        let segColor = skin.colors[0];
+        if (skin.pattern === 'stripes') {
+          segColor = skin.colors[i % skin.colors.length];
+        } else if (skin.pattern === 'gradient') {
+          const colorIdx = Math.floor((i / bodyLen) * skin.colors.length) % skin.colors.length;
+          segColor = skin.colors[colorIdx];
+        } else if (skin.pattern === 'segmented') {
+          segColor = Math.floor(i / 3) % 2 === 0 ? skin.colors[0] : skin.colors[1] || skin.colors[0];
+        } else if (skin.pattern === 'pulse') {
+          const p = Math.floor((i + this.gameTime * 0.2) % skin.colors.length);
+          segColor = skin.colors[p];
+        }
+
+        ctx.beginPath();
+        ctx.arc(seg.x, seg.y, seg.radius, 0, Math.PI * 2);
+        ctx.fillStyle = segColor;
+        ctx.fill();
+
+        if (!isZoomedOut) {
+          // Specular 3D highlight
+          ctx.beginPath();
+          ctx.arc(seg.x - seg.radius * 0.15, seg.y - seg.radius * 0.15, seg.radius * 0.55, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.22)';
+          ctx.fill();
+        }
       }
-
-      ctx.beginPath();
-      ctx.arc(seg.x, seg.y, seg.radius, 0, Math.PI * 2);
-      ctx.fillStyle = segColor;
-      ctx.fill();
-
-      // Specular 3D highlight
-      ctx.beginPath();
-      ctx.arc(seg.x - seg.radius * 0.15, seg.y - seg.radius * 0.15, seg.radius * 0.55, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.22)';
-      ctx.fill();
     }
 
     // 4. Draw Snake Head
-    const head = snake.head;
     ctx.beginPath();
     ctx.arc(head.x, head.y, snake.radius * 1.15, 0, Math.PI * 2);
     ctx.fillStyle = skin.headColor;
@@ -1384,18 +1436,20 @@ export class GameEngine {
       ctx.restore();
     }
 
-    // 7. Draw Name Tag and Score
-    ctx.font = `600 ${Math.max(12, snake.radius * 0.8)}px sans-serif`;
-    ctx.textAlign = 'center';
-    if (snake.isPlayer) {
-      ctx.fillStyle = '#00f0ff';
-      ctx.fillText(`${snake.name} (${Math.floor(snake.score)})`, head.x, head.y - snake.radius * 1.5 - (isTopLeader ? 16 : 4));
-    } else if (snake.isRemoteHuman) {
-      ctx.fillStyle = '#ff00aa';
-      ctx.fillText(`⚡ ${snake.name} (${Math.floor(snake.score)})`, head.x, head.y - snake.radius * 1.5 - (isTopLeader ? 16 : 4));
-    } else {
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
-      ctx.fillText(`${snake.name} (${Math.floor(snake.score)})`, head.x, head.y - snake.radius * 1.5 - (isTopLeader ? 16 : 4));
+    // 7. Draw Name Tag and Score (LOD: skip for distant bots when zoomed out to avoid heavy font overhead)
+    if (!isZoomedOut || isNearCamera || isTopLeader) {
+      ctx.font = `600 ${Math.max(12, snake.radius * 0.8)}px sans-serif`;
+      ctx.textAlign = 'center';
+      if (snake.isPlayer) {
+        ctx.fillStyle = '#00f0ff';
+        ctx.fillText(`${snake.name} (${Math.floor(snake.score)})`, head.x, head.y - snake.radius * 1.5 - (isTopLeader ? 16 : 4));
+      } else if (snake.isRemoteHuman) {
+        ctx.fillStyle = '#ff00aa';
+        ctx.fillText(`⚡ ${snake.name} (${Math.floor(snake.score)})`, head.x, head.y - snake.radius * 1.5 - (isTopLeader ? 16 : 4));
+      } else {
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+        ctx.fillText(`${snake.name} (${Math.floor(snake.score)})`, head.x, head.y - snake.radius * 1.5 - (isTopLeader ? 16 : 4));
+      }
     }
 
     // 8. Draw Spawn Protection Shield
