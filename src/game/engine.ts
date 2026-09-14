@@ -8,6 +8,8 @@ import {
   Point,
   SnakeSkin,
   PlayerPresence,
+  ControlMode,
+  KeyboardState,
 } from './types';
 import {
   ARENA_RADIUS,
@@ -99,6 +101,15 @@ export class GameEngine {
   public mouseCanvas: Point | null = null;
   public isMouseDown: boolean = false;
   public isSpaceDown: boolean = false;
+  public isShiftDown: boolean = false;
+  public keyboardKeys: KeyboardState = {
+    up: false,
+    down: false,
+    left: false,
+    right: false,
+  };
+  public controlMode: ControlMode = 'directional';
+  public lastInputSource: 'mouse' | 'keyboard' = 'mouse';
 
   public onGameOverCallback?: (stats: GameStats) => void;
   public onStateUpdate?: (engine: GameEngine) => void;
@@ -260,12 +271,44 @@ export class GameEngine {
     this.reprojectMouse();
   }
 
+  public isKeyboardActive(): boolean {
+    return (
+      this.keyboardKeys.up ||
+      this.keyboardKeys.down ||
+      this.keyboardKeys.left ||
+      this.keyboardKeys.right
+    );
+  }
+
+  public setKeyboardKey(key: keyof KeyboardState, pressed: boolean): void {
+    this.keyboardKeys[key] = pressed;
+    if (pressed) {
+      this.lastInputSource = 'keyboard';
+    }
+  }
+
+  public setControlMode(mode: ControlMode): void {
+    this.controlMode = mode;
+  }
+
+  public resetKeyboardKeys(): void {
+    this.keyboardKeys.up = false;
+    this.keyboardKeys.down = false;
+    this.keyboardKeys.left = false;
+    this.keyboardKeys.right = false;
+    this.isSpaceDown = false;
+    this.isShiftDown = false;
+  }
+
   public setMouseCanvas(x: number, y: number): void {
     if (!this.mouseCanvas) {
       this.mouseCanvas = { x, y };
     } else {
       this.mouseCanvas.x = x;
       this.mouseCanvas.y = y;
+    }
+    if (!this.isKeyboardActive()) {
+      this.lastInputSource = 'mouse';
     }
     this.reprojectMouse();
   }
@@ -592,6 +635,9 @@ export class GameEngine {
     this.mouseCanvas = null;
     this.isMouseDown = false;
     this.isSpaceDown = false;
+    this.isShiftDown = false;
+    this.resetKeyboardKeys();
+    this.lastInputSource = 'mouse';
     sound.setBoosting(false);
   }
 
@@ -718,19 +764,57 @@ export class GameEngine {
       this.stats.length = this.player.body.length;
       this.stats.kills = this.player.kills;
 
-      // Continuously update mouseWorld from screen cursor position so steering tracks
-      // cursor direction seamlessly even when stationary or as camera moves
-      this.reprojectMouse();
+      const isArrowHeld = this.isKeyboardActive();
 
-      // Steering towards cursor in world coordinates
-      const dx = this.mouseWorld.x - this.player.head.x;
-      const dy = this.mouseWorld.y - this.player.head.y;
-      if (dx * dx + dy * dy > 400) {
-        this.player.targetAngle = Math.atan2(dy, dx);
+      if (isArrowHeld || this.lastInputSource === 'keyboard') {
+        if (this.controlMode === 'directional') {
+          let ix = 0;
+          let iy = 0;
+          if (this.keyboardKeys.right) ix += 1;
+          if (this.keyboardKeys.left) ix -= 1;
+          if (this.keyboardKeys.down) iy += 1;
+          if (this.keyboardKeys.up) iy -= 1;
+
+          if (ix !== 0 || iy !== 0) {
+            this.player.targetAngle = Math.atan2(iy, ix);
+          }
+          // Project mouseWorld ahead in the target direction
+          this.mouseWorld.x = this.player.head.x + Math.cos(this.player.targetAngle) * 350;
+          this.mouseWorld.y = this.player.head.y + Math.sin(this.player.targetAngle) * 350;
+        } else {
+          // Classic Slither mode: Left/Right rotate continuously, Down reverses 180°
+          if (this.keyboardKeys.left && !this.keyboardKeys.right) {
+            this.player.targetAngle = this.player.angle - Math.PI / 2;
+          } else if (this.keyboardKeys.right && !this.keyboardKeys.left) {
+            this.player.targetAngle = this.player.angle + Math.PI / 2;
+          } else if (this.keyboardKeys.down) {
+            this.player.targetAngle = this.player.angle + Math.PI;
+          } else if (!isArrowHeld) {
+            this.player.targetAngle = this.player.angle;
+          }
+          this.mouseWorld.x = this.player.head.x + Math.cos(this.player.angle) * 350;
+          this.mouseWorld.y = this.player.head.y + Math.sin(this.player.angle) * 350;
+        }
+      } else {
+        // Continuously update mouseWorld from screen cursor position so steering tracks
+        // cursor direction seamlessly even when stationary or as camera moves
+        this.reprojectMouse();
+
+        // Steering towards cursor in world coordinates
+        const dx = this.mouseWorld.x - this.player.head.x;
+        const dy = this.mouseWorld.y - this.player.head.y;
+        if (dx * dx + dy * dy > 400) {
+          this.player.targetAngle = Math.atan2(dy, dx);
+        }
       }
 
       const canBoost = this.player.score > MIN_BOOST_MASS;
-      const wantsBoost = (this.isMouseDown || this.isSpaceDown) && canBoost;
+      const wantsBoost =
+        (this.isMouseDown ||
+          this.isSpaceDown ||
+          this.isShiftDown ||
+          (this.controlMode === 'classic' && this.keyboardKeys.up)) &&
+        canBoost;
       this.player.isBoosting = wantsBoost;
       sound.setBoosting(wantsBoost);
     }

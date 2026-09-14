@@ -58,9 +58,13 @@ export const GameOverModal: React.FC<GameOverModalProps> = ({
             Terminated by <strong className="text-red-400">{stats.killerName || 'Arena Barrier'}</strong>
           </p>
 
-          {isNewHighScore && (
+          {isNewHighScore ? (
             <div className="mt-1 px-3 py-1 rounded-full bg-yellow-500/20 border border-yellow-500/40 text-yellow-300 font-mono text-xs font-bold flex items-center gap-1.5 animate-pulse">
-              <Trophy className="w-3.5 h-3.5" /> NEW PERSONAL BEST!
+              <Trophy className="w-3.5 h-3.5" /> NEW PERSONAL BEST: {highScore}!
+            </div>
+          ) : (
+            <div className="text-[11px] font-mono text-slate-400">
+              Personal Best: <strong className="text-yellow-400">{highScore}</strong>
             </div>
           )}
         </div>

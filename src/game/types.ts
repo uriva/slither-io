@@ -143,3 +143,12 @@ export interface ChatMessage {
   isPlayer?: boolean;
 }
 
+export type ControlMode = 'directional' | 'classic';
+
+export interface KeyboardState {
+  up: boolean;
+  down: boolean;
+  left: boolean;
+  right: boolean;
+}
+

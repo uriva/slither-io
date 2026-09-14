@@ -2,12 +2,25 @@
 
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { GameEngine } from '@/game/engine';
-import { GameStats, PlayerPresence, ChatMessage } from '@/game/types';
+import { GameStats, PlayerPresence, ChatMessage, ControlMode } from '@/game/types';
 import { sound } from '@/game/audio';
 import { StartScreen } from './StartScreen';
 import { GameHUD } from './GameHUD';
 import { GameOverModal } from './GameOverModal';
 import { db, getArenaRoom, SECTORS, MAX_PLAYERS_PER_ROOM } from '@/lib/instant';
+
+function getStoredPlayerId(): string {
+  if (typeof window === 'undefined') return 'user-guest';
+  const existing = sessionStorage.getItem('slither_pid');
+  if (existing) return existing;
+  const newId = `user-${Math.random().toString(36).substring(2, 9)}`;
+  try {
+    sessionStorage.setItem('slither_pid', newId);
+  } catch {
+    // Ignore storage errors
+  }
+  return newId;
+}
 
 export const SlitherGame: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -18,39 +31,41 @@ export const SlitherGame: React.FC = () => {
   const lastMouseClientRef = useRef<{ x: number; y: number } | null>(null);
 
   // Unique player ID per browser session/tab so multiple tabs see each other as distinct players
-  const playerIdRef = useRef<string>(
-    typeof window !== 'undefined'
-      ? sessionStorage.getItem('slither_pid') || `user-${Math.random().toString(36).substring(2, 9)}`
-      : `user-${Math.random().toString(36).substring(2, 9)}`
-  );
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      sessionStorage.setItem('slither_pid', playerIdRef.current);
-    }
-  }, []);
+  const [playerId] = useState(getStoredPlayerId);
+  const playerIdRef = useRef<string>(playerId);
 
   const [gameState, setGameState] = useState<'menu' | 'playing' | 'gameover'>('menu');
-  const [highScore, setHighScore] = useState<number>(0);
+  const [highScore, setHighScore] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('slither_highscore');
+      if (saved) return parseInt(saved, 10) || 0;
+    }
+    return 0;
+  });
   const [isNewHighScore, setIsNewHighScore] = useState(false);
   const [stats, setStats] = useState<GameStats | null>(null);
   const [lastPlayerConfig, setLastPlayerConfig] = useState({ name: 'QuantumViper', skinId: 'void-dragon' });
-  const [isTouchDevice, setIsTouchDevice] = useState(false);
+  const [isTouchDevice] = useState(
+    () => typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0)
+  );
+  const [controlMode, setControlMode] = useState<ControlMode>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('slither_control_mode') as ControlMode | null;
+      if (saved === 'directional' || saved === 'classic') return saved;
+    }
+    return 'directional';
+  });
 
   // Dynamic Room partitioning: auto-balance to a new sector if room is full
-  const [roomId, setRoomId] = useState<string>('sector-alpha');
-  const [roomIndex, setRoomIndex] = useState<number>(0);
-
-  // Read URL query parameter ?room= if present (allows playing with friends in a custom room)
-  useEffect(() => {
+  const [roomId, setRoomId] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       const customRoom = params.get('room');
-      if (customRoom) {
-        setRoomId(customRoom.toLowerCase().trim());
-      }
+      if (customRoom) return customRoom.toLowerCase().trim();
     }
-  }, []);
+    return 'sector-alpha';
+  });
+  const [, setRoomIndex] = useState<number>(0);
 
   const currentRoom = useMemo(() => getArenaRoom(roomId), [roomId]);
   const { publishPresence, peers, user } = db.rooms.usePresence(currentRoom);
@@ -118,11 +133,16 @@ export const SlitherGame: React.FC = () => {
     }
 
     if (peerCount >= MAX_PLAYERS_PER_ROOM && gameState === 'menu') {
-      const nextIdx = (roomIndex + 1) % SECTORS.length;
-      setRoomIndex(nextIdx);
-      setRoomId(SECTORS[nextIdx]);
+      const timer = setTimeout(() => {
+        setRoomIndex((prev) => {
+          const nextIdx = (prev + 1) % SECTORS.length;
+          setRoomId(SECTORS[nextIdx]);
+          return nextIdx;
+        });
+      }, 0);
+      return () => clearTimeout(timer);
     }
-  }, [peerCount, roomIndex, gameState]);
+  }, [peerCount, gameState]);
 
   // Periodic state refresh for HUD
   const [, setTick] = useState(0);
@@ -245,27 +265,57 @@ export const SlitherGame: React.FC = () => {
     }
   }, [gameState, publishPresence]);
 
-  // Load High Score
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('slither_highscore');
-      if (saved) {
-        setHighScore(parseInt(saved, 10) || 0);
+  const handleToggleControlMode = useCallback(() => {
+    setControlMode((prev) => {
+      const next: ControlMode = prev === 'directional' ? 'classic' : 'directional';
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('slither_control_mode', next);
       }
-      setIsTouchDevice('ontouchstart' in window || navigator.maxTouchPoints > 0);
+      if (engineRef.current) {
+        engineRef.current.setControlMode(next);
+      }
+      sound.playEat();
+      return next;
+    });
+  }, []);
+
+  const handleSetControlMode = useCallback((mode: ControlMode) => {
+    setControlMode(mode);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('slither_control_mode', mode);
+    }
+    if (engineRef.current) {
+      engineRef.current.setControlMode(mode);
     }
   }, []);
 
-  // Initialize Game Engine
+  const highScoreRef = useRef(highScore);
   useEffect(() => {
-    const engine = new GameEngine();
-    engineRef.current = engine;
+    highScoreRef.current = highScore;
+  }, [highScore]);
 
-    engine.onGameOverCallback = (finalStats: GameStats) => {
+  const publishPresenceRef = useRef(publishPresence);
+  useEffect(() => {
+    publishPresenceRef.current = publishPresence;
+  }, [publishPresence]);
+
+  const controlModeRef = useRef(controlMode);
+  useEffect(() => {
+    controlModeRef.current = controlMode;
+    engineRef.current?.setControlMode(controlMode);
+  }, [controlMode]);
+
+  // Initialize Game Engine once on mount
+  useEffect(() => {
+    const eng = new GameEngine();
+    eng.setControlMode(controlModeRef.current);
+    engineRef.current = eng;
+
+    eng.onGameOverCallback = (finalStats: GameStats) => {
       setStats(finalStats);
       setGameState('gameover');
 
-      if (finalStats.score > highScore) {
+      if (finalStats.score > highScoreRef.current) {
         setHighScore(Math.floor(finalStats.score));
         setIsNewHighScore(true);
         if (typeof window !== 'undefined') {
@@ -277,7 +327,7 @@ export const SlitherGame: React.FC = () => {
 
       // Immediately notify all peers of death so no delayed packets resurrect the corpse
       try {
-        publishPresence({
+        publishPresenceRef.current({
           id: playerIdRef.current,
           isDead: true,
           updatedAt: Date.now(),
@@ -292,11 +342,11 @@ export const SlitherGame: React.FC = () => {
     let lastBoost = false;
     let lastFps = 0;
 
-    engine.onStateUpdate = (eng) => {
-      const p = eng.player;
+    eng.onStateUpdate = (engineInstance) => {
+      const p = engineInstance.player;
       if (!p) return;
       const score = Math.floor(p.score);
-      const fps = eng.fps;
+      const fps = engineInstance.fps;
       if (
         score !== lastScore ||
         p.kills !== lastKills ||
@@ -312,9 +362,9 @@ export const SlitherGame: React.FC = () => {
     };
 
     return () => {
-      engine.stop();
+      eng.stop();
     };
-  }, [highScore]);
+  }, []);
 
   // Convert mouse/touch screen coordinates accurately to canvas world coordinates
   const updateMousePosition = useCallback((clientX: number, clientY: number) => {
@@ -488,7 +538,7 @@ export const SlitherGame: React.FC = () => {
     lastPinchDistRef.current = null;
   }, []);
 
-  // Keyboard handlers (Space to boost, Enter to open chat)
+  // Keyboard handlers (Arrow keys / WASD steering, Space/Shift to boost, Enter for chat, C to toggle mode)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const activeEl = document.activeElement;
@@ -502,8 +552,61 @@ export const SlitherGame: React.FC = () => {
         return;
       }
 
-      if (e.code === 'Space' && engineRef.current) {
-        engineRef.current.isSpaceDown = true;
+      const code = e.code;
+
+      // Prevent scrolling on arrow keys and spacebar during gameplay
+      if (
+        code === 'ArrowUp' ||
+        code === 'ArrowDown' ||
+        code === 'ArrowLeft' ||
+        code === 'ArrowRight' ||
+        code === 'Space'
+      ) {
+        e.preventDefault();
+      }
+
+      // Boosting with Space or Shift
+      if (code === 'Space') {
+        if (engineRef.current) engineRef.current.isSpaceDown = true;
+        return;
+      }
+      if (code === 'ShiftLeft' || code === 'ShiftRight') {
+        if (engineRef.current) engineRef.current.isShiftDown = true;
+        return;
+      }
+
+      // Arrow keys and WASD steering
+      if (code === 'ArrowUp' || code === 'KeyW') {
+        engineRef.current?.setKeyboardKey('up', true);
+        return;
+      }
+      if (code === 'ArrowDown' || code === 'KeyS') {
+        engineRef.current?.setKeyboardKey('down', true);
+        return;
+      }
+      if (code === 'ArrowLeft' || code === 'KeyA') {
+        engineRef.current?.setKeyboardKey('left', true);
+        return;
+      }
+      if (code === 'ArrowRight' || code === 'KeyD') {
+        engineRef.current?.setKeyboardKey('right', true);
+        return;
+      }
+
+      // Quick toggle for control mode: 'C' key
+      if (code === 'KeyC' && !e.repeat && gameState === 'playing') {
+        e.preventDefault();
+        handleToggleControlMode();
+        return;
+      }
+
+      // Zoom keys: '+' / '=' to zoom in, '-' / '_' to zoom out
+      if ((code === 'Equal' || code === 'NumpadAdd') && gameState === 'playing') {
+        engineRef.current?.handleWheel(-100);
+        return;
+      }
+      if ((code === 'Minus' || code === 'NumpadSubtract') && gameState === 'playing') {
+        engineRef.current?.handleWheel(100);
         return;
       }
 
@@ -516,6 +619,7 @@ export const SlitherGame: React.FC = () => {
         setIsChatOpen(true);
       }
     };
+
     const handleKeyUp = (e: KeyboardEvent) => {
       const activeEl = document.activeElement;
       const isTyping =
@@ -528,18 +632,42 @@ export const SlitherGame: React.FC = () => {
         return;
       }
 
-      if (e.code === 'Space' && engineRef.current) {
+      const code = e.code;
+
+      if (code === 'Space' && engineRef.current) {
         engineRef.current.isSpaceDown = false;
       }
+      if ((code === 'ShiftLeft' || code === 'ShiftRight') && engineRef.current) {
+        engineRef.current.isShiftDown = false;
+      }
+
+      if (code === 'ArrowUp' || code === 'KeyW') {
+        engineRef.current?.setKeyboardKey('up', false);
+      }
+      if (code === 'ArrowDown' || code === 'KeyS') {
+        engineRef.current?.setKeyboardKey('down', false);
+      }
+      if (code === 'ArrowLeft' || code === 'KeyA') {
+        engineRef.current?.setKeyboardKey('left', false);
+      }
+      if (code === 'ArrowRight' || code === 'KeyD') {
+        engineRef.current?.setKeyboardKey('right', false);
+      }
+    };
+
+    const handleBlur = () => {
+      engineRef.current?.resetKeyboardKeys();
     };
 
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
     };
-  }, [gameState]);
+  }, [gameState, handleToggleControlMode]);
 
   const startGame = (name: string, skinId: string) => {
     setLastPlayerConfig({ name, skinId });
@@ -552,6 +680,7 @@ export const SlitherGame: React.FC = () => {
     canvasRef.current?.focus();
 
     handleResize();
+    engine.setControlMode(controlMode);
     engine.start(name, skinId, playerIdRef.current);
     if (lastMouseClientRef.current) {
       updateMousePosition(lastMouseClientRef.current.x, lastMouseClientRef.current.y);
@@ -602,12 +731,16 @@ export const SlitherGame: React.FC = () => {
           highScore={highScore}
           onlineCount={onlineCount}
           roomId={roomId}
+          controlMode={controlMode}
+          onControlModeChange={handleSetControlMode}
         />
       )}
 
       {/* Active Game HUD */}
+      {/* eslint-disable-next-line react-hooks/refs */}
       {gameState === 'playing' && engineRef.current && (
         <GameHUD
+          /* eslint-disable-next-line react-hooks/refs */
           engine={engineRef.current}
           onlineCount={onlineCount}
           roomId={roomId}
@@ -615,6 +748,8 @@ export const SlitherGame: React.FC = () => {
           isChatOpen={isChatOpen}
           onChatOpenChange={setIsChatOpen}
           onSendMessage={handleSendMessage}
+          controlMode={controlMode}
+          onToggleControlMode={handleToggleControlMode}
           onBoostStart={() => {
             if (engineRef.current) engineRef.current.isMouseDown = true;
           }}
