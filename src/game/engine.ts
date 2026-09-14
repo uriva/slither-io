@@ -74,6 +74,7 @@ export class GameEngine {
   // Pre-rendered sprite cache for high-performance orb drawing
   private orbSprites: HTMLCanvasElement[] = [];
   private preySprite: HTMLCanvasElement | null = null;
+  private customSpriteCache: Map<string, HTMLCanvasElement> = new Map();
   private gridPattern: CanvasPattern | null = null;
 
   private nextOrbId = 1;
@@ -187,6 +188,44 @@ export class GameEngine {
     }
   }
 
+  // Memoized custom orb sprite generator for snake-colored mass drops
+  private getCustomOrbSprite(color: string, glowColor: string): HTMLCanvasElement | null {
+    if (typeof document === 'undefined') return null;
+    const key = `${color}|${glowColor}`;
+    let sprite = this.customSpriteCache.get(key);
+    if (!sprite) {
+      const size = 64;
+      const center = size / 2;
+      const radius = 22;
+
+      sprite = document.createElement('canvas');
+      sprite.width = size;
+      sprite.height = size;
+      const ctx = sprite.getContext('2d');
+      if (ctx) {
+        const glowGrad = ctx.createRadialGradient(center, center, radius * 0.2, center, center, radius * 1.45);
+        glowGrad.addColorStop(0, glowColor);
+        glowGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = glowGrad;
+        ctx.beginPath();
+        ctx.arc(center, center, radius * 1.45, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.arc(center, center, radius, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.arc(center - radius * 0.3, center - radius * 0.3, radius * 0.35, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.88)';
+        ctx.fill();
+      }
+      this.customSpriteCache.set(key, sprite);
+    }
+    return sprite;
+  }
+
   public handleWheel(deltaY: number): void {
     const zoomFactor = deltaY < 0 ? 1.12 : 0.89;
     this.camera.userZoom = Math.max(0.35, Math.min(2.4, this.camera.userZoom * zoomFactor));
@@ -258,7 +297,16 @@ export class GameEngine {
     }
   }
 
-  private spawnOrb(x?: number, y?: number, value: number = 1, isDeathDrop: boolean = false): void {
+  private spawnOrb(
+    x?: number,
+    y?: number,
+    value: number = 1,
+    isDeathDrop: boolean = false,
+    customColor?: string,
+    customGlow?: string,
+    sizeScale: number = 1.0,
+    radiance: number = 1.0
+  ): void {
     let ox = x;
     let oy = y;
 
@@ -277,19 +325,27 @@ export class GameEngine {
       }
     }
 
-    const colorIndex = Math.floor(Math.random() * FOOD_COLORS.length);
-    const colorConfig = FOOD_COLORS[colorIndex];
+    const isCustom = !!customColor;
+    const colorIndex = isCustom ? -1 : Math.floor(Math.random() * FOOD_COLORS.length);
+    const colorConfig = isCustom ? null : FOOD_COLORS[colorIndex];
+
+    const finalColor = customColor || colorConfig!.color;
+    const finalGlow = customGlow || (customColor ? `rgba(255, 255, 255, 0.4)` : colorConfig!.glow);
+
     const baseR = isDeathDrop ? Math.min(22, 7 + value * 1.1) : Math.min(12, 5 + value * 0.9);
+    const finalRadius = Math.max(4.5, Math.min(26, baseR * sizeScale));
 
     const orb: Orb = {
       id: this.nextOrbId++,
       x: ox,
       y: oy,
-      radius: baseR,
-      color: colorConfig.color,
-      glowColor: colorConfig.glow,
+      radius: finalRadius,
+      color: finalColor,
+      glowColor: finalGlow,
       colorIndex,
       value: value,
+      radiance: radiance || (0.75 + Math.random() * 0.6),
+      pulseSpeed: 0.025 + Math.random() * 0.045,
       pulsePhase: Math.random() * Math.PI * 2,
     };
     orb.gridKey = this.foodGrid.insert(orb as Orb & GridItem);
@@ -599,10 +655,14 @@ export class GameEngine {
           snake.boostFuel = 0;
           snake.score = Math.max(MIN_BOOST_MASS, snake.score - 1.2);
 
-          // Spawn dropped mass orb from tail
+          // Spawn dropped mass orb from tail matching snake skin colors!
           const tail = snake.body[snake.body.length - 1];
           if (tail) {
-            this.spawnOrb(tail.x, tail.y, 2, false);
+            const chosenColor = snake.skin.colors[Math.floor(Math.random() * snake.skin.colors.length)];
+            const glow = snake.skin.glowColor;
+            const sizeScale = 0.75 + Math.random() * 0.55;
+            const radiance = 0.8 + Math.random() * 0.5;
+            this.spawnOrb(tail.x, tail.y, 2, false, chosenColor, glow, sizeScale, radiance);
             this.particles.push({
               x: tail.x + (Math.random() - 0.5) * 10,
               y: tail.y + (Math.random() - 0.5) * 10,
@@ -772,13 +832,33 @@ export class GameEngine {
     if (snake.isDead) return;
     snake.isDead = true;
 
-    // Drop luminous mass orbs along snake's former body segments
-    const step = Math.max(1, Math.floor(snake.body.length / 35));
+    // Drop luminous mass orbs along snake's former body segments matching snake's colors!
+    const colors = snake.skin.colors;
+    const step = Math.max(1, Math.floor(snake.body.length / 36));
     for (let i = 0; i < snake.body.length; i += step) {
       const seg = snake.body[i];
-      const scatter = (Math.random() - 0.5) * snake.radius * 2;
+      const scatter = (Math.random() - 0.5) * snake.radius * 2.2;
       const orbVal = Math.min(18, Math.max(4, Math.floor(snake.score / 25)));
-      this.spawnOrb(seg.x + scatter, seg.y + scatter, orbVal, true);
+
+      // Color from snake's skin palette
+      const chosenColor = colors[i % colors.length];
+      const glow = snake.skin.glowColor;
+
+      // Varied size and radiance:
+      // Giant pulsating core orbs, medium glowing spheres, and shimmering satellite glimmers
+      const sizeScale = 0.6 + Math.random() * 0.9; // 0.6x to 1.5x
+      const radiance = 0.7 + Math.random() * 0.8;  // 0.7x to 1.5x
+
+      this.spawnOrb(
+        seg.x + scatter,
+        seg.y + scatter,
+        orbVal,
+        true,
+        chosenColor,
+        glow,
+        sizeScale,
+        radiance
+      );
     }
 
     // Supernova particle shockwave
@@ -814,7 +894,7 @@ export class GameEngine {
 
     for (let i = this.orbs.length - 1; i >= 0; i--) {
       const orb = this.orbs[i];
-      orb.pulsePhase += 0.05;
+      orb.pulsePhase += (orb.pulseSpeed || 0.04);
 
       if (orb.isPrey) {
         this.foodGrid.remove(orb as Orb & GridItem, orb.gridKey);
@@ -1021,6 +1101,13 @@ export class GameEngine {
       if (hasSprites) {
         if (orb.isPrey && this.preySprite) {
           ctx.drawImage(this.preySprite, orb.x - r * 1.5, orb.y - r * 1.5, r * 3, r * 3);
+        } else if (orb.colorIndex === -1) {
+          // Hardware-accelerated custom orb matching snake's skin color!
+          const sprite = this.getCustomOrbSprite(orb.color, orb.glowColor);
+          if (sprite) {
+            const glowMul = 1.35 + (orb.radiance || 1.0) * 0.25;
+            ctx.drawImage(sprite, orb.x - r * glowMul, orb.y - r * glowMul, r * (glowMul * 2), r * (glowMul * 2));
+          }
         } else {
           const sprite = this.orbSprites[orb.colorIndex || 0];
           if (sprite) {

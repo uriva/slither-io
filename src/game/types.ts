@@ -58,6 +58,8 @@ export interface Orb {
   colorIndex: number;
   value: number;
   gridKey?: number;
+  radiance?: number; // Halo radiance factor (0.6 - 1.6)
+  pulseSpeed?: number; // Individual shimmer speed
   vx?: number;
   vy?: number;
   isPrey?: boolean; // Wandering fleeing firefly
