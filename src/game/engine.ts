@@ -370,14 +370,14 @@ export class GameEngine {
       id: this.nextOrbId++,
       x: ox,
       y: oy,
-      radius: 14,
+      radius: 15,
       color: '#fffb00',
-      glowColor: 'rgba(255, 251, 0, 0.8)',
+      glowColor: 'rgba(255, 251, 0, 0.85)',
       colorIndex: 3,
-      value: 40,
+      value: 45,
       isPrey: true,
       preyAngle: Math.random() * Math.PI * 2,
-      preySpeed: 3.6,
+      preySpeed: 2.6,
       pulsePhase: Math.random() * Math.PI * 2,
     };
     prey.gridKey = this.foodGrid.insert(prey as Orb & GridItem);
@@ -771,11 +771,11 @@ export class GameEngine {
     }
 
     // 6. Food Eating & Pickup Magnetism
-    const pickupRadius = snake.radius * 2.2;
+    const pickupRadius = snake.radius * 2.4;
     const eatRadius = snake.radius * 1.05;
 
     this.orbQueryList.length = 0;
-    this.foodGrid.queryInto(snake.head.x, snake.head.y, pickupRadius, this.orbQueryList);
+    this.foodGrid.queryInto(snake.head.x, snake.head.y, pickupRadius + 40, this.orbQueryList);
 
     for (let i = 0; i < this.orbQueryList.length; i++) {
       const orb = this.orbQueryList[i];
@@ -783,10 +783,15 @@ export class GameEngine {
       const ody = snake.head.y - orb.y;
       const odist = Math.hypot(odx, ody);
 
-      if (odist <= eatRadius + orb.radius) {
+      // Fireflies get more generous capture and magnetic suction
+      const effectiveEat = orb.isPrey ? eatRadius * 1.35 : eatRadius;
+      const effectivePickup = orb.isPrey ? pickupRadius * 1.35 : pickupRadius;
+
+      if (odist <= effectiveEat + orb.radius) {
         this.eatOrb(snake, orb);
-      } else if (odist <= pickupRadius) {
-        const pullSpeed = (1 - odist / pickupRadius) * 10;
+      } else if (odist <= effectivePickup) {
+        const pullFactor = 1 - odist / effectivePickup;
+        const pullSpeed = pullFactor * (orb.isPrey ? 15 : 10);
         orb.x += (odx / odist) * pullSpeed;
         orb.y += (ody / odist) * pullSpeed;
       }
@@ -989,20 +994,29 @@ export class GameEngine {
       if (orb.isPrey) {
         this.foodGrid.remove(orb as Orb & GridItem, orb.gridKey);
 
-        orb.preyAngle = (orb.preyAngle || 0) + (Math.random() - 0.5) * 0.2;
-        orb.x += Math.cos(orb.preyAngle) * (orb.preySpeed || 4.2);
-        orb.y += Math.sin(orb.preyAngle) * (orb.preySpeed || 4.2);
-
         // Flee sprint from nearby snake heads
+        let fleeingFromSnake = false;
         for (const snake of this.snakes) {
           if (snake.isDead) continue;
           const d = Math.hypot(snake.head.x - orb.x, snake.head.y - orb.y);
-          if (d < 240) {
-            orb.preyAngle = Math.atan2(orb.y - snake.head.y, orb.x - snake.head.x);
-            orb.preySpeed = 6.0;
+          if (d < 165) {
+            // Flee away with gentle erratic flutter wobble
+            const baseFleeAngle = Math.atan2(orb.y - snake.head.y, orb.x - snake.head.x);
+            orb.preyAngle = baseFleeAngle + Math.sin(this.gameTime * 0.2) * 0.3;
+            orb.preySpeed = 4.7; // Easily catchable with boost (6.4 speed)
+            fleeingFromSnake = true;
             break;
           }
         }
+
+        if (!fleeingFromSnake) {
+          // Relax back to gentle wander speed
+          orb.preyAngle = (orb.preyAngle || 0) + (Math.random() - 0.5) * 0.25;
+          orb.preySpeed = (orb.preySpeed || 2.6) + (2.6 - (orb.preySpeed || 2.6)) * 0.08;
+        }
+
+        orb.x += Math.cos(orb.preyAngle!) * orb.preySpeed!;
+        orb.y += Math.sin(orb.preyAngle!) * orb.preySpeed!;
 
         // Steer back inside if approaching boundary
         const currentDist = Math.hypot(orb.x, orb.y);
