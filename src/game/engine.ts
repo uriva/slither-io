@@ -340,8 +340,29 @@ export class GameEngine {
     const finalColor = customColor || colorConfig!.color;
     const finalGlow = customGlow || (customColor ? `rgba(255, 255, 255, 0.4)` : colorConfig!.glow);
 
-    const baseR = isDeathDrop ? Math.min(22, 7 + value * 1.1) : Math.min(12, 5 + value * 0.9);
-    const finalRadius = Math.max(4.5, Math.min(26, baseR * sizeScale));
+    // Varied sizing for ambient pellets (all small, but diverse):
+    // 50% tiny stardust specks (3.2px - 4.2px, value: 1)
+    // 35% medium nutrient pellets (4.6px - 5.8px, value: 1-2)
+    // 15% radiant glowing pearls (6.2px - 7.6px, value: 2-3)
+    let finalRadius: number;
+    let finalValue = value;
+
+    if (!isDeathDrop && !isCustom && (x === undefined || y === undefined)) {
+      const roll = Math.random();
+      if (roll < 0.50) {
+        finalRadius = 3.2 + Math.random() * 1.0;
+        finalValue = 1;
+      } else if (roll < 0.85) {
+        finalRadius = 4.6 + Math.random() * 1.2;
+        finalValue = Math.random() < 0.35 ? 2 : 1;
+      } else {
+        finalRadius = 6.2 + Math.random() * 1.4;
+        finalValue = Math.random() < 0.5 ? 3 : 2;
+      }
+    } else {
+      const baseR = isDeathDrop ? Math.min(22, 7 + value * 1.1) : Math.min(12, 5 + value * 0.9);
+      finalRadius = Math.max(4.2, Math.min(26, baseR * sizeScale));
+    }
 
     const orb: Orb = {
       id: this.nextOrbId++,
@@ -351,9 +372,9 @@ export class GameEngine {
       color: finalColor,
       glowColor: finalGlow,
       colorIndex,
-      value: value,
-      radiance: radiance || (0.75 + Math.random() * 0.6),
-      pulseSpeed: 0.025 + Math.random() * 0.045,
+      value: finalValue,
+      radiance: radiance || (0.7 + Math.random() * 0.7),
+      pulseSpeed: 0.02 + Math.random() * 0.045,
       pulsePhase: Math.random() * Math.PI * 2,
     };
     orb.gridKey = this.foodGrid.insert(orb as Orb & GridItem);
