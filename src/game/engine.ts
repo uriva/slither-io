@@ -601,8 +601,8 @@ export class GameEngine {
     this.bodyGrid.clear();
     for (const snake of this.snakes) {
       if (snake.isDead) continue;
-      // Insert every segment (no stride gaps) for 100% airtight collision
-      for (let i = 2; i < snake.body.length; i++) {
+      // Include neck (i = 1) so wider snakes physically shield their head in head-on collisions
+      for (let i = 1; i < snake.body.length; i++) {
         const seg = snake.body[i];
         this.bodyGrid.insert({
           id: i,
@@ -840,7 +840,53 @@ export class GameEngine {
         continue;
       }
 
-      // 2. Head-to-Body Collision with other snakes
+      // 2. Direct Head-to-Head Collision Check (smaller snake loses)
+      for (let j = 0; j < this.snakes.length; j++) {
+        const other = this.snakes[j];
+        if (other.id === snake.id || other.isDead || other.invulnerableTimer > 0) continue;
+
+        const headDist = Math.hypot(hx - other.head.x, hy - other.head.y);
+        const contactRadius = (snake.radius + other.radius) * 0.82;
+
+        if (headDist < contactRadius) {
+          const massDiff = snake.score - other.score;
+          if (massDiff < -4) {
+            // This snake is smaller -> dies!
+            this.killSnake(snake, other.name);
+            if (!other.isDead) {
+              other.kills += 1;
+              if (other.isPlayer) {
+                this.stats.kills += 1;
+                sound.playKill();
+                this.triggerKillBanner(`CRUSHED ${snake.name}! +${Math.floor(snake.score)} MASS`);
+                this.addFloatingText(`CRUSHED! +${Math.floor(snake.score)}`, hx, hy - 40, '#00f0ff', 1.4);
+              }
+            }
+            break;
+          } else if (massDiff > 4) {
+            // Other snake is smaller -> other dies!
+            this.killSnake(other, snake.name);
+            if (!snake.isDead) {
+              snake.kills += 1;
+              if (snake.isPlayer) {
+                this.stats.kills += 1;
+                sound.playKill();
+                this.triggerKillBanner(`CRUSHED ${other.name}! +${Math.floor(other.score)} MASS`);
+                this.addFloatingText(`CRUSHED! +${Math.floor(other.score)}`, other.head.x, other.head.y - 40, '#00f0ff', 1.4);
+              }
+            }
+          } else {
+            // Virtually identical mass: mutual explosion
+            this.killSnake(snake, other.name);
+            this.killSnake(other, snake.name);
+            break;
+          }
+        }
+      }
+
+      if (snake.isDead) continue;
+
+      // 3. Head-to-Body Collision with other snakes
       this.bodyQueryList.length = 0;
       this.bodyGrid.queryInto(hx, hy, snake.radius * 2.0, this.bodyQueryList);
 
