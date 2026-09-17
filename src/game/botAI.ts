@@ -31,6 +31,7 @@ export type BotArchetype = typeof BOT_ARCHETYPES[number];
 
 export class BotAIController {
   private static foodQueryList: (Orb & GridItem)[] = [];
+  private static bodyQueryBuffer: BodySegmentItem[] = [];
 
   public static getRandomArchetype(): BotArchetype {
     return BOT_ARCHETYPES[Math.floor(Math.random() * BOT_ARCHETYPES.length)];
@@ -124,7 +125,64 @@ export class BotAIController {
       }
     }
 
-    // 3. Fast Tactical Waypoint Pursuit & Interception
+    // 3. Enclosure Radar: Detect if enemy body is coiling/wrapping around us (360° horizon check)
+    // Evaluates every 8 frames to detect traps before the loop seals shut
+    if (bot.aiTimer % 8 === 0) {
+      BotAIController.bodyQueryBuffer.length = 0;
+      bodyGrid.queryInto(headX, headY, 340, BotAIController.bodyQueryBuffer);
+
+      if (BotAIController.bodyQueryBuffer.length >= 8) {
+        const sectors = [0, 0, 0, 0, 0, 0, 0, 0];
+        let foreignSegs = 0;
+
+        for (let i = 0; i < BotAIController.bodyQueryBuffer.length; i++) {
+          const seg = BotAIController.bodyQueryBuffer[i];
+          if (seg.snakeId === bot.id) continue;
+          foreignSegs++;
+          const ang = Math.atan2(seg.y - headY, seg.x - headX);
+          const normAng = ang + Math.PI;
+          const sIdx = Math.min(7, Math.floor(normAng / (Math.PI / 4)));
+          sectors[sIdx]++;
+        }
+
+        if (foreignSegs >= 8) {
+          let occupied = 0;
+          let maxDensity = 0;
+          let minDensity = Infinity;
+          let bestEscapeSector = -1;
+
+          for (let i = 0; i < 8; i++) {
+            if (sectors[i] > 0) occupied++;
+            if (sectors[i] > maxDensity) maxDensity = sectors[i];
+            if (sectors[i] < minDensity) {
+              minDensity = sectors[i];
+              bestEscapeSector = i;
+            }
+          }
+
+          // If 5 or more of the 8 horizon sectors are blocked, we are inside an enclosure!
+          if (occupied >= 5 && bestEscapeSector !== -1 && maxDensity >= 4) {
+            const escapeAngle = -Math.PI + (bestEscapeSector + 0.5) * (Math.PI / 4);
+
+            if (minDensity <= 2 || minDensity < maxDensity * 0.35) {
+              // Open gap detected! Breakout sprint before the loop seals!
+              bot.targetAngle = escapeAngle;
+              bot.isBoosting = canBoost;
+              bot.aiTarget = null;
+              return;
+            } else {
+              // Loop completely sealed: tight protective orbit in the center to survive
+              bot.targetAngle = bot.angle + 0.18;
+              bot.isBoosting = false;
+              bot.aiTarget = null;
+              return;
+            }
+          }
+        }
+      }
+    }
+
+    // 4. Fast Tactical Waypoint Pursuit & Interception
     // Crisp tactical reaction (6-9 frames ~100ms-150ms)
     const decisionInterval = archetype === 'interceptor' || archetype === 'flanker' ? 6 : 9;
     if (bot.aiTimer % decisionInterval === 0 || !bot.aiTarget) {
@@ -160,6 +218,15 @@ export class BotAIController {
             y: headY + Math.sin(fleeAngle) * 400,
           };
           wantBoost = canBoost && oppDist < 180; // Panic boost to escape if pressed
+        } else if (massDelta >= 25 && oppDist < 320 && bot.score > 160) {
+          // Offensive Enclosure: Wrap around smaller opponent in an inward spiral
+          const angleToOpp = Math.atan2(nearestOpponent.head.y - headY, nearestOpponent.head.x - headX);
+          const orbitAngle = angleToOpp + Math.PI / 2 + 0.28;
+          chosenTarget = {
+            x: nearestOpponent.head.x + Math.cos(orbitAngle) * 160,
+            y: nearestOpponent.head.y + Math.sin(orbitAngle) * 160,
+          };
+          wantBoost = canBoost && oppDist > 160;
         } else if (massDelta >= 15 && oppDist < 350) {
           // Clear mass advantage: cautious cut-off from safe distance
           const oppAngle = nearestOpponent.angle;

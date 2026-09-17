@@ -40,6 +40,7 @@ export interface Snake {
   isBoosting: boolean;
   body: Segment[];
   targetLength: number;
+  currentLength?: number;
   radius: number;
   score: number;
   kills: number;

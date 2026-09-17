@@ -596,6 +596,7 @@ export class GameEngine {
       isBoosting: false,
       body,
       targetLength: initialLength,
+      currentLength: initialLength,
       radius: initialRadius,
       score: isPlayer ? 55 : Math.max(35, initialLength * 2),
       kills: 0,
@@ -1155,13 +1156,41 @@ export class GameEngine {
     }
 
     const spacing = Math.max(7, snake.radius * 0.55);
+
+    // Tail Growth Physics:
+    // When eating mass, tail stays frozen on the ground while head advances,
+    // neither elongating backwards nor shortening until reaching targetLength!
+    if (snake.currentLength === undefined) {
+      snake.currentLength = snake.body.length;
+    }
+
+    if (snake.currentLength < snake.targetLength) {
+      // Growing: tail stays pinned on the ground; body length expands with forward motion
+      snake.currentLength = Math.min(snake.targetLength, snake.currentLength + moveDist / spacing);
+    } else if (snake.currentLength > snake.targetLength) {
+      // Shrinking (boosting): body shortens toward targetLength
+      snake.currentLength = Math.max(snake.targetLength, snake.currentLength - 0.25 * dtScale);
+    }
+
+    // Adjust visual joint count to match currentLength
+    const desiredJoints = Math.max(INITIAL_SNAKE_LENGTH, Math.floor(snake.currentLength));
+    while (snake.body.length < desiredJoints) {
+      const idx = snake.body.length;
+      const taper = Math.max(0.40, 1 - (idx / desiredJoints) * 0.60);
+      snake.body.push({ x: snake.head.x, y: snake.head.y, radius: snake.radius * taper });
+    }
+    while (snake.body.length > desiredJoints && snake.body.length > INITIAL_SNAKE_LENGTH) {
+      snake.body.pop();
+    }
+
     snake.body[0].x = snake.head.x;
     snake.body[0].y = snake.head.y;
     snake.body[0].radius = snake.radius;
 
     const bodyLen = snake.body.length;
     for (let i = 1; i < bodyLen; i++) {
-      const targetDist = i * spacing + distAcc;
+      const segFraction = i / (bodyLen - 1);
+      const targetDist = segFraction * (snake.currentLength - 1) * spacing + distAcc;
       const trailPos = targetDist / STEP;
       const step0 = Math.floor(trailPos);
       const frac = trailPos - step0;
@@ -1175,27 +1204,6 @@ export class GameEngine {
       // Taper radius smoothly toward sleek tail tip
       const taper = Math.max(0.40, 1 - (i / bodyLen) * 0.60);
       snake.body[i].radius = snake.radius * taper;
-    }
-
-    // Adjust body length to target length along trail (never cluster or bunch at tail)
-    while (snake.body.length < snake.targetLength) {
-      const idx = snake.body.length;
-      const targetDist = idx * spacing + distAcc;
-      const trailPos = targetDist / STEP;
-      const step0 = Math.floor(trailPos);
-      const frac = trailPos - step0;
-
-      const idx0 = (headIdx - step0 + CAPACITY) & MASK;
-      const idx1 = (headIdx - step0 - 1 + CAPACITY) & MASK;
-
-      const segX = trailX[idx0] * (1 - frac) + trailX[idx1] * frac;
-      const segY = trailY[idx0] * (1 - frac) + trailY[idx1] * frac;
-      const taper = Math.max(0.40, 1 - (idx / snake.targetLength) * 0.60);
-
-      snake.body.push({ x: segX, y: segY, radius: snake.radius * taper });
-    }
-    while (snake.body.length > snake.targetLength && snake.body.length > 14) {
-      snake.body.pop();
     }
 
     // 6. Food Eating & Pickup Magnetism
