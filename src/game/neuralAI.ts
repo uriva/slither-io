@@ -114,48 +114,53 @@ export class NeuralBotController {
     const headY = bot.head.y;
     const canBoost = bot.score > MIN_BOOST_MASS + 5;
 
-    // 1. Extract 32 normalized features directly into reusable buffer
-    this.extractFeatures(bot, allSnakes, bodyGrid, foodGrid, this.tempVec);
+    bot.aiTimer = (bot.aiTimer || 0) + 1;
 
-    // 2. Forward Pass: 32 -> 64 -> 32 -> 2
-    // Layer 1
-    for (let i = 0; i < 64; i++) {
-      let sum = arch.b1[i];
-      const wRow = arch.w1[i];
+    // Human-like decision latency: updates tactical neural path every 14 frames (~240ms)
+    if (bot.aiTimer % 14 === 0 || !bot.aiTarget) {
+      // 1. Extract 32 normalized features directly into reusable buffer
+      this.extractFeatures(bot, allSnakes, bodyGrid, foodGrid, this.tempVec);
+
+      // 2. Forward Pass: 32 -> 64 -> 32 -> 2
+      // Layer 1
+      for (let i = 0; i < 64; i++) {
+        let sum = arch.b1[i];
+        const wRow = arch.w1[i];
+        for (let j = 0; j < 32; j++) {
+          sum += this.tempVec[j] * wRow[j];
+        }
+        this.tempH1[i] = sum > 0 ? sum : 0;
+      }
+
+      // Layer 2
+      for (let i = 0; i < 32; i++) {
+        let sum = arch.b2[i];
+        const wRow = arch.w2[i];
+        for (let j = 0; j < 64; j++) {
+          sum += this.tempH1[j] * wRow[j];
+        }
+        this.tempH2[i] = sum > 0 ? sum : 0;
+      }
+
+      // Output: [steerDelta, boostLogit]
+      let steerOut = arch.b3[0];
+      let boostOut = arch.b3[1];
+      const wRow0 = arch.w3[0];
+      const wRow1 = arch.w3[1];
       for (let j = 0; j < 32; j++) {
-        sum += this.tempVec[j] * wRow[j];
+        steerOut += this.tempH2[j] * wRow0[j];
+        boostOut += this.tempH2[j] * wRow1[j];
       }
-      this.tempH1[i] = sum > 0 ? sum : 0;
+
+      const steerDelta = Math.max(-1.0, Math.min(1.0, steerOut)) * Math.PI;
+      bot.targetAngle = bot.angle + steerDelta;
+      while (bot.targetAngle < -Math.PI) bot.targetAngle += Math.PI * 2;
+      while (bot.targetAngle > Math.PI) bot.targetAngle -= Math.PI * 2;
+
+      bot.isBoosting = canBoost && boostOut > (1.0 - arch.boostAggression);
     }
 
-    // Layer 2
-    for (let i = 0; i < 32; i++) {
-      let sum = arch.b2[i];
-      const wRow = arch.w2[i];
-      for (let j = 0; j < 64; j++) {
-        sum += this.tempH1[j] * wRow[j];
-      }
-      this.tempH2[i] = sum > 0 ? sum : 0;
-    }
-
-    // Output: [steerDelta, boostLogit]
-    let steerOut = arch.b3[0];
-    let boostOut = arch.b3[1];
-    const wRow0 = arch.w3[0];
-    const wRow1 = arch.w3[1];
-    for (let j = 0; j < 32; j++) {
-      steerOut += this.tempH2[j] * wRow0[j];
-      boostOut += this.tempH2[j] * wRow1[j];
-    }
-
-    const steerDelta = Math.max(-1.0, Math.min(1.0, steerOut)) * Math.PI;
-    bot.targetAngle = bot.angle + steerDelta;
-    while (bot.targetAngle < -Math.PI) bot.targetAngle += Math.PI * 2;
-    while (bot.targetAngle > Math.PI) bot.targetAngle -= Math.PI * 2;
-
-    bot.isBoosting = canBoost && boostOut > (1.0 - arch.boostAggression);
-
-    // 3. Reflex Safety Gate
+    // 3. Human-like reflex window (checks obstacles every 6 frames ~100ms)
     const distSq = headX * headX + headY * headY;
     if (distSq > ARENA_DANGER_SQ) {
       bot.targetAngle = Math.atan2(-headY, -headX);
@@ -163,7 +168,7 @@ export class NeuralBotController {
     }
 
     const lookAhead = bot.radius * (bot.isBoosting ? 5.2 : 3.8) * arch.safetyMultiplier;
-    if (bodyGrid.hasObstacle(headX, headY, lookAhead + 30, bot.id)) {
+    if (bot.aiTimer % 6 === 0 && bodyGrid.hasObstacle(headX, headY, lookAhead + 30, bot.id)) {
       let bestClear: number | null = null;
       let maxClear = -1;
       let bestAngle = bot.angle + Math.PI;

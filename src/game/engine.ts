@@ -557,23 +557,28 @@ export class GameEngine {
         angle = Math.random() * Math.PI * 2;
       }
     }
+    const initialRadius = isPlayer ? BASE_RADIUS : Math.min(MAX_RADIUS, BASE_RADIUS + Math.sqrt(Math.max(0, initialLength * 2)) * 0.42);
+    const spacing = Math.max(7, initialRadius * 0.55);
     const body: { x: number; y: number; radius: number }[] = [];
 
     for (let i = 0; i < initialLength; i++) {
+      const taper = Math.max(0.40, 1 - (i / initialLength) * 0.60);
       body.push({
-        x: x - Math.cos(angle) * (i * 8),
-        y: y - Math.sin(angle) * (i * 8),
-        radius: BASE_RADIUS,
+        x: x - Math.cos(angle) * (i * spacing),
+        y: y - Math.sin(angle) * (i * spacing),
+        radius: initialRadius * taper,
       });
     }
 
     const CAPACITY = 2048;
+    const MASK = CAPACITY - 1;
     const STEP = 3.5;
     const trailX = new Float32Array(CAPACITY);
     const trailY = new Float32Array(CAPACITY);
     for (let i = 0; i < CAPACITY; i++) {
-      trailX[i] = x - Math.cos(angle) * (i * STEP);
-      trailY[i] = y - Math.sin(angle) * (i * STEP);
+      const idx = (0 - i + CAPACITY) & MASK;
+      trailX[idx] = x - Math.cos(angle) * (i * STEP);
+      trailY[idx] = y - Math.sin(angle) * (i * STEP);
     }
 
     return {
@@ -591,7 +596,7 @@ export class GameEngine {
       isBoosting: false,
       body,
       targetLength: initialLength,
-      radius: BASE_RADIUS,
+      radius: initialRadius,
       score: isPlayer ? 55 : Math.max(35, initialLength * 2),
       kills: 0,
       isDead: false,
@@ -1167,15 +1172,27 @@ export class GameEngine {
       snake.body[i].x = trailX[idx0] * (1 - frac) + trailX[idx1] * frac;
       snake.body[i].y = trailY[idx0] * (1 - frac) + trailY[idx1] * frac;
 
-      // Taper radius slightly toward tail
-      const taper = Math.max(0.65, 1 - (i / bodyLen) * 0.35);
+      // Taper radius smoothly toward sleek tail tip
+      const taper = Math.max(0.40, 1 - (i / bodyLen) * 0.60);
       snake.body[i].radius = snake.radius * taper;
     }
 
-    // Adjust body length to target length
+    // Adjust body length to target length along trail (never cluster or bunch at tail)
     while (snake.body.length < snake.targetLength) {
-      const last = snake.body[snake.body.length - 1];
-      snake.body.push({ x: last.x, y: last.y, radius: last.radius });
+      const idx = snake.body.length;
+      const targetDist = idx * spacing + distAcc;
+      const trailPos = targetDist / STEP;
+      const step0 = Math.floor(trailPos);
+      const frac = trailPos - step0;
+
+      const idx0 = (headIdx - step0 + CAPACITY) & MASK;
+      const idx1 = (headIdx - step0 - 1 + CAPACITY) & MASK;
+
+      const segX = trailX[idx0] * (1 - frac) + trailX[idx1] * frac;
+      const segY = trailY[idx0] * (1 - frac) + trailY[idx1] * frac;
+      const taper = Math.max(0.40, 1 - (idx / snake.targetLength) * 0.60);
+
+      snake.body.push({ x: segX, y: segY, radius: snake.radius * taper });
     }
     while (snake.body.length > snake.targetLength && snake.body.length > 14) {
       snake.body.pop();
@@ -1374,36 +1391,34 @@ export class GameEngine {
           );
 
         if (isHeadCollision) {
-          const massDiff = snake.score - other.score;
-          if (massDiff < -4) {
-            // This snake is smaller -> dies!
-            this.killSnake(snake, other.name, other);
-            if (!other.isDead) {
-              other.kills += 1;
-              if (other.isPlayer) {
-                this.stats.kills += 1;
-                sound.playKill();
-                this.triggerKillBanner(`CRUSHED ${snake.name}! +${Math.floor(snake.score)} MASS`);
-                this.addFloatingText(`CRUSHED! +${Math.floor(snake.score)}`, hx, hy - 40, '#00f0ff', 1.4);
-              }
-            }
-            break;
-          } else if (massDiff > 4) {
-            // Other snake is smaller -> other dies!
-            this.killSnake(other, snake.name, snake);
-            if (!snake.isDead) {
-              snake.kills += 1;
-              if (snake.isPlayer) {
-                this.stats.kills += 1;
-                sound.playKill();
-                this.triggerKillBanner(`CRUSHED ${other.name}! +${Math.floor(other.score)} MASS`);
-                this.addFloatingText(`CRUSHED! +${Math.floor(other.score)}`, other.head.x, other.head.y - 40, '#00f0ff', 1.4);
-              }
-            }
+          // Exactly one snake dies and one survives - NEVER simultaneous mutual death!
+          let loser: Snake;
+          let winner: Snake;
+
+          if (snake.score !== other.score) {
+            loser = snake.score < other.score ? snake : other;
+            winner = snake.score < other.score ? other : snake;
+          } else if (snake.speed !== other.speed) {
+            // Faster (boosting) snake wins head-on tie-breaker
+            loser = snake.speed < other.speed ? snake : other;
+            winner = snake.speed < other.speed ? other : snake;
           } else {
-            // Virtually identical mass: mutual explosion
-            this.killSnake(snake, other.name, other);
-            this.killSnake(other, snake.name, snake);
+            // Deterministic ID tie-breaker so exactly one survives
+            loser = snake.id > other.id ? snake : other;
+            winner = snake.id > other.id ? other : snake;
+          }
+
+          this.killSnake(loser, winner.name, winner);
+          if (!winner.isDead) {
+            winner.kills += 1;
+            if (winner.isPlayer) {
+              this.stats.kills += 1;
+              sound.playKill();
+              this.triggerKillBanner(`CRUSHED ${loser.name}! +${Math.floor(loser.score)} MASS`);
+              this.addFloatingText(`CRUSHED! +${Math.floor(loser.score)}`, loser.head.x, loser.head.y - 40, '#00f0ff', 1.4);
+            }
+          }
+          if (loser.id === snake.id) {
             break;
           }
         }
@@ -1947,7 +1962,8 @@ export class GameEngine {
     for (let i = bodyLen - 2; i >= 0; i -= spineStep) {
       ctx.lineTo(snake.body[i].x, snake.body[i].y);
     }
-    ctx.lineWidth = snake.radius * 1.9;
+    // Sleek continuous body stroke (never balloons at tail tip)
+    ctx.lineWidth = Math.max(7, snake.radius * 1.35);
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.strokeStyle = skin.colors[0];

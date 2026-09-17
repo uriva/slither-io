@@ -287,21 +287,28 @@ function evaluateCandidateNiche(
 
   stats.peakScore = candidate.score;
 
+  let cachedAction = { steerDelta: 0, boostLogit: 0 };
+
   engine.customBotUpdate = (bot, allSnakes, bodyGrid, foodGrid) => {
     if (bot.id === 'candidate') {
-      const obs = ObservationExtractor.extract(bot, allSnakes, bodyGrid, foodGrid);
-      const vec = ObservationExtractor.toNormalizedVector(obs);
-      const action = forwardPass(vec, weights);
+      bot.aiTimer = (bot.aiTimer || 0) + 1;
+
+      // Human-like decision latency (~240ms between strategic re-evaluations)
+      if (bot.aiTimer % 14 === 0 || !cachedAction) {
+        const obs = ObservationExtractor.extract(bot, allSnakes, bodyGrid, foodGrid);
+        const vec = ObservationExtractor.toNormalizedVector(obs);
+        cachedAction = forwardPass(vec, weights);
+      }
 
       // Neural target steering
-      bot.targetAngle = bot.angle + action.steerDelta;
+      bot.targetAngle = bot.angle + cachedAction.steerDelta;
       while (bot.targetAngle < -Math.PI) bot.targetAngle += Math.PI * 2;
       while (bot.targetAngle > Math.PI) bot.targetAngle -= Math.PI * 2;
 
       const canBoost = bot.score > MIN_BOOST_MASS + 5;
-      bot.isBoosting = canBoost && action.boostLogit > (1.0 - archetype.boostAggression);
+      bot.isBoosting = canBoost && cachedAction.boostLogit > (1.0 - archetype.boostAggression);
 
-      // Reflex Safety Gate with Archetype Multiplier
+      // Human-like reflex window (checks obstacles every 6 frames ~100ms)
       const headX = bot.head.x;
       const headY = bot.head.y;
       if (headX * headX + headY * headY > ARENA_DANGER_SQ) {
@@ -310,7 +317,7 @@ function evaluateCandidateNiche(
       }
 
       const lookAhead = bot.radius * (bot.isBoosting ? 5.2 : 3.8) * archetype.safetyMarginMultiplier;
-      if (bodyGrid.hasObstacle(headX, headY, lookAhead + 30, bot.id)) {
+      if (bot.aiTimer % 6 === 0 && bodyGrid.hasObstacle(headX, headY, lookAhead + 30, bot.id)) {
         let bestClear: number | null = null;
         let maxClear = -1;
         let bestAngle = bot.angle + Math.PI;

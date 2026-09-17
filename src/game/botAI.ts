@@ -59,12 +59,15 @@ export class BotAIController {
       return;
     }
 
-    // 2. Proactive Collision Avoidance (Forward "Whiskers" Raycast)
-    // Defensive archetypes maintain wider safety margin buffers
-    const safetyMargin = archetype === 'punisher' || archetype === 'conservative_giant' ? 4.8 : 4.0;
+    // 2. Human-Like Collision Avoidance Reflex
+    // Evaluates every 5-7 frames (~100ms reaction window) rather than superhuman 16ms robotic twitches!
+    const reflexInterval = 6;
+    const isReflexTick = bot.aiTimer % reflexInterval === 0;
+
+    const safetyMargin = archetype === 'punisher' || archetype === 'conservative_giant' ? 4.6 : 3.9;
     const lookAheadDist = bot.radius * (bot.isBoosting ? safetyMargin * 1.25 : safetyMargin);
 
-    if (bodyGrid.hasObstacle(headX, headY, lookAheadDist + 35, bot.id)) {
+    if (isReflexTick && bodyGrid.hasObstacle(headX, headY, lookAheadDist + 35, bot.id)) {
       let bestClearAngle: number | null = null;
       let urgentDanger = false;
       let maxClearSteps = -1;
@@ -99,14 +102,16 @@ export class BotAIController {
       }
 
       if (urgentDanger || bestClearAngle !== null || maxClearSteps < 3) {
-        bot.targetAngle = bestClearAngle !== null ? bestClearAngle : bestClearanceAngle;
+        const escapeAngle = bestClearAngle !== null ? bestClearAngle : bestClearanceAngle;
+        bot.targetAngle = escapeAngle;
         bot.isBoosting = false;
         return;
       }
     }
 
-    // 3. Tactical Waypoint Pursuit & Intercept Geometry
-    const decisionInterval = archetype === 'interceptor' ? 6 : 10;
+    // 3. Human-Like Tactical Waypoint Pursuit & Decision Latency
+    // Updates macro target every 14-18 frames (~240ms-300ms) reflecting human focus switching
+    const decisionInterval = archetype === 'interceptor' ? 12 : 16;
     if (bot.aiTimer % decisionInterval === 0 || !bot.aiTarget) {
       let chosenTarget: Point | null = null;
       let wantBoost = false;
