@@ -72,6 +72,30 @@ export const SlitherGame: React.FC = () => {
   const [isChatOpen, setIsChatOpen] = useState(false);
 
   const publishChat = db.rooms.usePublishTopic(currentRoom, 'chat');
+  const publishKill = db.rooms.usePublishTopic(currentRoom, 'kill');
+  const publishKillRef = useRef(publishKill);
+  useEffect(() => {
+    publishKillRef.current = publishKill;
+  }, [publishKill]);
+
+  db.rooms.useTopicEffect(currentRoom, 'kill', (event: any) => {
+    if (!event || !event.killerName) return;
+    const eng = engineRef.current;
+    if (eng) {
+      if (eng.killFeed.some((k) => k.id === event.id)) return;
+      eng.killFeed.unshift({
+        id: event.id || Date.now(),
+        killerName: event.killerName,
+        killerColor: event.killerColor || '#00f0ff',
+        victimName: event.victimName,
+        victimColor: event.victimColor || '#ff4466',
+        timer: 240,
+        isPlayerKiller: eng.player?.name === event.killerName,
+        isPlayerVictim: eng.player?.name === event.victimName,
+      });
+      if (eng.killFeed.length > 5) eng.killFeed.pop();
+    }
+  });
 
   db.rooms.useTopicEffect(currentRoom, 'chat', (event: ChatMessage) => {
     if (!event || !event.text) return;
@@ -276,6 +300,23 @@ export const SlitherGame: React.FC = () => {
   useEffect(() => {
     const eng = new GameEngine();
     engineRef.current = eng;
+
+    eng.onSnakeKilled = (victim, killer, reason) => {
+      if (killer && (killer.isPlayer || victim.isPlayer || killer.isRemoteHuman || victim.isRemoteHuman)) {
+        try {
+          publishKillRef.current({
+            id: `kill-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+            killerName: killer.name,
+            killerColor: killer.skin?.colors[0] || '#00f0ff',
+            victimName: victim.name,
+            victimColor: victim.skin?.colors[0] || '#ff4466',
+            timestamp: Date.now(),
+          });
+        } catch {
+          // Ignore network errors
+        }
+      }
+    };
 
     eng.onGameOverCallback = (finalStats: GameStats) => {
       setStats(finalStats);

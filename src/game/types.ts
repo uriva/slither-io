@@ -56,6 +56,21 @@ export interface Snake {
   chatTimer?: number;
   policyId?: string;
   aiArchetype?: string;
+  trailX?: Float32Array;
+  trailY?: Float32Array;
+  trailHeadIdx?: number;
+  trailDistAcc?: number;
+}
+
+export interface KillFeedItem {
+  id: number;
+  killerName: string;
+  killerColor: string;
+  victimName: string;
+  victimColor: string;
+  timer: number;
+  isPlayerKiller?: boolean;
+  isPlayerVictim?: boolean;
 }
 
 export interface Orb {

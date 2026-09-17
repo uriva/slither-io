@@ -172,6 +172,27 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               })}
             </div>
           </div>
+
+          {/* Unobtrusive Room Kill Feed */}
+          {engine.killFeed && engine.killFeed.length > 0 && (
+            <div className="flex flex-col gap-1 mt-2 pointer-events-auto max-w-[240px]">
+              {engine.killFeed.map((item) => (
+                <div
+                  key={item.id}
+                  className="flex items-center justify-between text-[11px] font-mono px-2.5 py-1 rounded-lg bg-slate-950/75 border border-white/10 backdrop-blur-md shadow-md text-white transition-opacity duration-300"
+                  style={{ opacity: Math.max(0, Math.min(1, item.timer / 30)) }}
+                >
+                  <span className="truncate max-w-[90px] font-bold" style={{ color: item.killerColor || '#00f0ff' }}>
+                    {item.isPlayerKiller ? '⚡ YOU' : item.killerName}
+                  </span>
+                  <span className="text-slate-400 text-[10px] mx-1">⚔️</span>
+                  <span className="truncate max-w-[90px]" style={{ color: item.victimColor || '#ff4466' }}>
+                    {item.isPlayerVictim ? '💀 YOU' : item.victimName}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 

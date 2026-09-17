@@ -9,6 +9,7 @@ import {
   SnakeSkin,
   PlayerPresence,
   KeyboardState,
+  KillFeedItem,
 } from './types';
 import {
   ARENA_RADIUS,
@@ -58,6 +59,7 @@ export class GameEngine {
 
   public leaderboard: LeaderboardEntry[] = [];
   public killBanner: { text: string; timer: number } | null = null;
+  public killFeed: KillFeedItem[] = [];
   public isGameOver: boolean = false;
   public stats: GameStats = {
     score: 0,
@@ -563,6 +565,15 @@ export class GameEngine {
       });
     }
 
+    const CAPACITY = 2048;
+    const STEP = 3.5;
+    const trailX = new Float32Array(CAPACITY);
+    const trailY = new Float32Array(CAPACITY);
+    for (let i = 0; i < CAPACITY; i++) {
+      trailX[i] = x - Math.cos(angle) * (i * STEP);
+      trailY[i] = y - Math.sin(angle) * (i * STEP);
+    }
+
     return {
       id,
       name,
@@ -588,6 +599,10 @@ export class GameEngine {
       invulnerableTimer: isPlayer ? 180 : 90, // 3s spawn protection
       spawnTimestamp: Date.now(),
       aiTimer: Math.floor(Math.random() * 60),
+      trailX,
+      trailY,
+      trailHeadIdx: 0,
+      trailDistAcc: 0,
     };
   }
 
@@ -998,8 +1013,11 @@ export class GameEngine {
     }
 
     // 3. Move Head Forward
-    snake.head.x += Math.cos(snake.angle) * (snake.speed * dtScale);
-    snake.head.y += Math.sin(snake.angle) * (snake.speed * dtScale);
+    const moveDist = snake.speed * dtScale;
+    const dx = Math.cos(snake.angle) * moveDist;
+    const dy = Math.sin(snake.angle) * moveDist;
+    snake.head.x += dx;
+    snake.head.y += dy;
 
     // 4. Update Dynamic Radius and Target Length
     // Logarithmic segment scaling: capped at 220 visual joints so performance never drops!
@@ -1012,32 +1030,66 @@ export class GameEngine {
       INITIAL_SNAKE_LENGTH + Math.floor(Math.sqrt(Math.max(0, snake.score)) * 3.2)
     );
 
-    // 5. Body Segment Kinematics (Inverse Distance Constraint)
+    // 5. Body Segment Kinematics (Path History Footprint - Rigid Against Knots & Loops)
+    const CAPACITY = 2048;
+    const MASK = 2047;
+    const STEP = 3.5;
+
+    if (!snake.trailX || !snake.trailY) {
+      snake.trailX = new Float32Array(CAPACITY);
+      snake.trailY = new Float32Array(CAPACITY);
+      snake.trailHeadIdx = 0;
+      snake.trailDistAcc = 0;
+      for (let i = 0; i < CAPACITY; i++) {
+        snake.trailX[i] = snake.head.x - Math.cos(snake.angle) * (i * STEP);
+        snake.trailY[i] = snake.head.y - Math.sin(snake.angle) * (i * STEP);
+      }
+    }
+
+    const trailX = snake.trailX;
+    const trailY = snake.trailY;
+
+    let headIdx = snake.trailHeadIdx || 0;
+    let distAcc = (snake.trailDistAcc || 0) + moveDist;
+    const numSteps = Math.floor(distAcc / STEP);
+    distAcc -= numSteps * STEP;
+    snake.trailDistAcc = distAcc;
+
+    if (numSteps > 0 && moveDist > 0.0001) {
+      const ux = dx / moveDist;
+      const uy = dy / moveDist;
+      const startX = snake.head.x - dx;
+      const startY = snake.head.y - dy;
+
+      for (let s = 1; s <= numSteps; s++) {
+        headIdx = (headIdx + 1) & MASK;
+        trailX[headIdx] = startX + ux * (s * STEP);
+        trailY[headIdx] = startY + uy * (s * STEP);
+      }
+      snake.trailHeadIdx = headIdx;
+    }
+
     const spacing = Math.max(7, snake.radius * 0.55);
-    const spacingSq = spacing * spacing;
     snake.body[0].x = snake.head.x;
     snake.body[0].y = snake.head.y;
     snake.body[0].radius = snake.radius;
 
     const bodyLen = snake.body.length;
     for (let i = 1; i < bodyLen; i++) {
-      const prev = snake.body[i - 1];
-      const curr = snake.body[i];
+      const targetDist = i * spacing + distAcc;
+      const trailPos = targetDist / STEP;
+      const step0 = Math.floor(trailPos);
+      const frac = trailPos - step0;
 
-      const dx = prev.x - curr.x;
-      const dy = prev.y - curr.y;
-      const distSq = dx * dx + dy * dy;
+      const idx0 = (headIdx - step0 + CAPACITY) & MASK;
+      const idx1 = (headIdx - step0 - 1 + CAPACITY) & MASK;
 
-      if (distSq > spacingSq) {
-        const dist = Math.sqrt(distSq);
-        const factor = (dist - spacing) / dist;
-        curr.x += dx * factor;
-        curr.y += dy * factor;
-      }
+      snake.body[i].x = trailX[idx0] * (1 - frac) + trailX[idx1] * frac;
+      snake.body[i].y = trailY[idx0] * (1 - frac) + trailY[idx1] * frac;
 
       // Taper radius slightly toward tail
       const taper = Math.max(0.65, 1 - (i / bodyLen) * 0.35);
-      curr.radius = snake.radius * taper;
+      snake.body[i].radius = snake.radius * taper;
     }
 
     // Adjust body length to target length
@@ -1335,6 +1387,27 @@ export class GameEngine {
       this.onSnakeKilled(snake, killerSnake ?? null, killerName);
     }
 
+    // Add to room kill feed (visible to all players in arena)
+    if (killerName && killerName !== 'Arena Barrier') {
+      const killerCol = killerSnake?.skin?.colors[0] || (killerSnake?.isPlayer ? '#00f0ff' : '#ffd700');
+      const victimCol = snake.skin?.colors[0] || (snake.isPlayer ? '#00f0ff' : '#ff4466');
+
+      this.killFeed.unshift({
+        id: this.nextTextId++,
+        killerName: killerSnake ? killerSnake.name : killerName,
+        killerColor: killerCol,
+        victimName: snake.name,
+        victimColor: victimCol,
+        timer: 240, // ~4 seconds at 60 FPS
+        isPlayerKiller: killerSnake?.isPlayer,
+        isPlayerVictim: snake.isPlayer,
+      });
+
+      if (this.killFeed.length > 5) {
+        this.killFeed.pop();
+      }
+    }
+
     // Drop luminous mass orbs along snake's former body segments matching snake's colors!
     const colors = snake.skin.colors;
     const step = Math.max(1, Math.floor(snake.body.length / 36));
@@ -1491,6 +1564,14 @@ export class GameEngine {
       this.killBanner.timer -= 1;
       if (this.killBanner.timer <= 0) {
         this.killBanner = null;
+      }
+    }
+
+    // Decrement kill feed timers
+    for (let i = this.killFeed.length - 1; i >= 0; i--) {
+      this.killFeed[i].timer -= 1;
+      if (this.killFeed[i].timer <= 0) {
+        this.killFeed.splice(i, 1);
       }
     }
   }
