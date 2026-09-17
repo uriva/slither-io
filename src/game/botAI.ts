@@ -59,15 +59,13 @@ export class BotAIController {
       return;
     }
 
-    // 2. Human-Like Collision Avoidance Reflex
-    // Evaluates every 5-7 frames (~100ms reaction window) rather than superhuman 16ms robotic twitches!
-    const reflexInterval = 6;
-    const isReflexTick = bot.aiTimer % reflexInterval === 0;
-
-    const safetyMargin = archetype === 'punisher' || archetype === 'conservative_giant' ? 4.6 : 3.9;
+    // 2. Collision Avoidance Reflex
+    // Immediate danger triggers instant reflex; general path clearance evaluates at 30Hz
+    const isReflexTick = bot.aiTimer % 2 === 0;
+    const safetyMargin = archetype === 'punisher' || archetype === 'conservative_giant' ? 4.8 : 4.1;
     const lookAheadDist = bot.radius * (bot.isBoosting ? safetyMargin * 1.25 : safetyMargin);
 
-    if (isReflexTick && bodyGrid.hasObstacle(headX, headY, lookAheadDist + 35, bot.id)) {
+    if (bodyGrid.hasObstacle(headX, headY, lookAheadDist + 35, bot.id)) {
       let bestClearAngle: number | null = null;
       let urgentDanger = false;
       let maxClearSteps = -1;
@@ -91,6 +89,23 @@ export class BotAIController {
             if (step === 1) urgentDanger = true;
             break;
           }
+
+          // Actively avoid other snakes' heads (never ram or suicide into opponent faces!)
+          for (let j = 0; j < allSnakes.length; j++) {
+            const s = allSnakes[j];
+            if (s.id === bot.id || s.isDead) continue;
+            const dhx = rx - s.head.x;
+            const dhy = ry - s.head.y;
+            const safeHeadDist = bot.radius + s.radius + 18;
+            if (dhx * dhx + dhy * dhy <= safeHeadDist * safeHeadDist) {
+              if (s.score >= bot.score - 5) {
+                clear = false;
+                if (step === 1) urgentDanger = true;
+                break;
+              }
+            }
+          }
+          if (!clear) break;
           stepsCleared = step;
         }
 
@@ -101,17 +116,17 @@ export class BotAIController {
         }
       }
 
-      if (urgentDanger || bestClearAngle !== null || maxClearSteps < 3) {
-        const escapeAngle = bestClearAngle !== null ? bestClearAngle : bestClearanceAngle;
-        bot.targetAngle = escapeAngle;
+      // If in immediate collision path, react instantly; otherwise smooth at 30Hz
+      if (urgentDanger || (isReflexTick && (bestClearAngle !== null || maxClearSteps < 3))) {
+        bot.targetAngle = bestClearAngle !== null ? bestClearAngle : bestClearanceAngle;
         bot.isBoosting = false;
         return;
       }
     }
 
-    // 3. Human-Like Tactical Waypoint Pursuit & Decision Latency
-    // Updates macro target every 14-18 frames (~240ms-300ms) reflecting human focus switching
-    const decisionInterval = archetype === 'interceptor' ? 12 : 16;
+    // 3. Fast Tactical Waypoint Pursuit & Interception
+    // Crisp tactical reaction (6-9 frames ~100ms-150ms)
+    const decisionInterval = archetype === 'interceptor' || archetype === 'flanker' ? 6 : 9;
     if (bot.aiTimer % decisionInterval === 0 || !bot.aiTarget) {
       let chosenTarget: Point | null = null;
       let wantBoost = false;
@@ -134,28 +149,25 @@ export class BotAIController {
 
       const oppDist = nearestOpponent ? Math.sqrt(nearestDistSq) : Infinity;
 
-      // Universal Defensive Counter-Trap: if any opponent rushes within point-blank striking range (220px)
-      if (nearestOpponent && oppDist < 220 && bot.score >= nearestOpponent.score - 10) {
-        const oppAngle = nearestOpponent.angle;
-        const leadX = nearestOpponent.head.x + Math.cos(oppAngle) * 115;
-        const leadY = nearestOpponent.head.y + Math.sin(oppAngle) * 115;
-        chosenTarget = { x: leadX, y: leadY };
-        wantBoost = canBoost && Math.random() < 0.8;
-      } else if (nearestOpponent && oppDist < 260 && bot.score < nearestOpponent.score - 20) {
-        // Immediate perimeter spacing from giant predators
-        const fleeAngle = Math.atan2(headY - nearestOpponent.head.y, headX - nearestOpponent.head.x);
-        chosenTarget = { x: headX + Math.cos(fleeAngle) * 350, y: headY + Math.sin(fleeAngle) * 350 };
-        wantBoost = canBoost && oppDist < 160;
-      } else if (archetype === 'interceptor' || archetype === 'flanker') {
-        // Aggressive Predictive Cut-Off with dynamic closing speed triangle
-        if (nearestOpponent && oppDist < 400 && bot.score >= nearestOpponent.score - 10) {
-          const closingSpeed = bot.speed + nearestOpponent.speed;
-          const leadTime = Math.min(22, oppDist / closingSpeed);
-          const leadDist = nearestOpponent.speed * leadTime * 1.35;
-          const leadX = nearestOpponent.head.x + Math.cos(nearestOpponent.angle) * leadDist;
-          const leadY = nearestOpponent.head.y + Math.sin(nearestOpponent.angle) * leadDist;
+      if (nearestOpponent) {
+        const massDelta = bot.score - nearestOpponent.score;
+
+        // If opponent is bigger, equal, or dangerous: DO NOT SUICIDE! Maintain safe perimeter!
+        if (massDelta < 15 && oppDist < 350) {
+          const fleeAngle = Math.atan2(headY - nearestOpponent.head.y, headX - nearestOpponent.head.x);
+          chosenTarget = {
+            x: headX + Math.cos(fleeAngle) * 400,
+            y: headY + Math.sin(fleeAngle) * 400,
+          };
+          wantBoost = canBoost && oppDist < 180; // Panic boost to escape if pressed
+        } else if (massDelta >= 15 && oppDist < 350) {
+          // Clear mass advantage: cautious cut-off from safe distance
+          const oppAngle = nearestOpponent.angle;
+          const leadDist = Math.min(130, oppDist * 0.45);
+          const leadX = nearestOpponent.head.x + Math.cos(oppAngle) * leadDist;
+          const leadY = nearestOpponent.head.y + Math.sin(oppAngle) * leadDist;
           chosenTarget = { x: leadX, y: leadY };
-          wantBoost = canBoost && oppDist < 230;
+          wantBoost = canBoost && oppDist < 200;
         }
       } else if (archetype === 'wall_hugger') {
         // Patrol perimeter ring away from crowded center
