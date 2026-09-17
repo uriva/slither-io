@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "bench": "bun scripts/benchmark/run.ts",
+    "publish:mindblown": "next build && python3 scripts/publish-mindblown.py"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

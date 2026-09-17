@@ -34,6 +34,23 @@ export const StartScreen: React.FC<StartScreenProps> = ({
 
   const currentSkin: SnakeSkin = SKINS[selectedSkinIndex];
 
+  // Sync Mindblown viewer username if available
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mb = window.mindblown;
+    if (mb?.viewer?.username) {
+      setPlayerName(mb.viewer.username);
+    }
+    if (mb?.viewer?.onchange) {
+      const unsub = mb.viewer.onchange((who) => {
+        if (who?.username) {
+          setPlayerName(who.username);
+        }
+      });
+      return unsub;
+    }
+  }, []);
+
   // Random nickname generator
   const generateRandomName = () => {
     const prefixes = ['Hyper', 'Cyber', 'Neon', 'Cosmic', 'Solar', 'Quantum', 'Shadow', 'Apex', 'Vortex', 'Glitch'];
@@ -306,6 +323,22 @@ export const StartScreen: React.FC<StartScreenProps> = ({
             </span>
           </div>
         </Card>
+
+        {/* Creator Attribution */}
+        <div className="flex items-center justify-center gap-1.5 text-xs font-mono text-slate-400">
+          <span>Created by</span>
+          <a
+            href="https://x.com/urivalev"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-cyan-400 hover:text-cyan-300 hover:underline transition-colors cursor-pointer"
+          >
+            <svg className="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24">
+              <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+            </svg>
+            @urivalev
+          </a>
+        </div>
       </div>
     </div>
   );

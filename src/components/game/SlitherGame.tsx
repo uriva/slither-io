@@ -281,6 +281,15 @@ export const SlitherGame: React.FC = () => {
       setStats(finalStats);
       setGameState('gameover');
 
+      const score = Math.floor(finalStats.score);
+      const seconds = Math.max(1, Math.floor(finalStats.timeAlive));
+      try {
+        window.mindblown?.run?.end({ score, seconds, kills: finalStats.kills });
+        window.mindblown?.leaderboard?.submit('score', score);
+      } catch (err) {
+        console.warn('Mindblown run.end error:', err);
+      }
+
       if (finalStats.score > highScoreRef.current) {
         setHighScore(Math.floor(finalStats.score));
         setIsNewHighScore(true);
@@ -674,6 +683,11 @@ export const SlitherGame: React.FC = () => {
 
     handleResize();
     engine.start(name, skinId, playerIdRef.current);
+    try {
+      window.mindblown?.run?.start();
+    } catch (err) {
+      console.warn('Mindblown run.start error:', err);
+    }
     if (lastMouseClientRef.current) {
       updateMousePosition(lastMouseClientRef.current.x, lastMouseClientRef.current.y);
     }
@@ -685,6 +699,13 @@ export const SlitherGame: React.FC = () => {
   };
 
   const returnToMenu = () => {
+    if (gameState === 'playing') {
+      try {
+        window.mindblown?.run?.end({ score: Math.floor(engineRef.current?.player?.score || 0) });
+      } catch {
+        // Ignore
+      }
+    }
     if (engineRef.current) {
       engineRef.current.stop();
     }

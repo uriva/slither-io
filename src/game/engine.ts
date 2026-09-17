@@ -30,6 +30,7 @@ import {
 } from './constants';
 import { SpatialGrid, GridItem } from './spatialGrid';
 import { BotAIController } from './botAI';
+import { NeuralBotController } from './neuralAI';
 import { sound } from './audio';
 
 interface BodySegmentItem extends GridItem {
@@ -112,6 +113,14 @@ export class GameEngine {
 
   public onGameOverCallback?: (stats: GameStats) => void;
   public onStateUpdate?: (engine: GameEngine) => void;
+  public customBotUpdate?: (
+    bot: Snake,
+    allSnakes: Snake[],
+    bodyGrid: SpatialGrid<BodySegmentItem>,
+    foodGrid: SpatialGrid<Orb & GridItem>
+  ) => void;
+  public onSnakeKilled?: (victim: Snake, killer: Snake | null, reason: string) => void;
+  public autoReplenishBots: boolean = true;
 
   constructor() {
     this.initOrbSprites();
@@ -523,7 +532,7 @@ export class GameEngine {
     this.orbs.push(prey);
   }
 
-  private createSnake(
+  public createSnake(
     id: string,
     name: string,
     isPlayer: boolean,
@@ -619,7 +628,9 @@ export class GameEngine {
       );
 
       const botLen = Math.floor(INITIAL_SNAKE_LENGTH + Math.random() * 50 + (Math.random() < 0.15 ? 90 : 0));
-      this.snakes.push(this.createSnake(`bot-${Date.now()}-${i}`, name, false, skin, bx, by, botLen));
+      const bot = this.createSnake(`bot-${Date.now()}-${i}`, name, false, skin, bx, by, botLen);
+      bot.aiArchetype = BotAIController.getRandomArchetype();
+      this.snakes.push(bot);
     }
   }
 
@@ -840,7 +851,11 @@ export class GameEngine {
     for (let i = 0; i < this.snakes.length; i++) {
       const snake = this.snakes[i];
       if (!snake.isPlayer && !snake.isDead) {
-        BotAIController.updateBot(snake, this.snakes, this.bodyGrid, this.foodGrid);
+        if (this.customBotUpdate) {
+          this.customBotUpdate(snake, this.snakes, this.bodyGrid, this.foodGrid);
+        } else {
+          BotAIController.updateBot(snake, this.snakes, this.bodyGrid, this.foodGrid);
+        }
       }
     }
 
@@ -872,7 +887,7 @@ export class GameEngine {
       const s = this.snakes[i];
       if (!s.isPlayer && !s.isDead) activeBots++;
     }
-    if (activeBots < BOT_COUNT) {
+    if (this.autoReplenishBots && activeBots < BOT_COUNT) {
       this.initBots();
     }
 
@@ -1202,7 +1217,7 @@ export class GameEngine {
 
       // 1. Arena Boundary Collision (zero Math.hypot)
       if (hx * hx + hy * hy >= ARENA_RADIUS_SQ) {
-        this.killSnake(snake, 'Arena Barrier');
+        this.killSnake(snake, 'Arena Barrier', null);
         continue;
       }
 
@@ -1230,7 +1245,7 @@ export class GameEngine {
           const massDiff = snake.score - other.score;
           if (massDiff < -4) {
             // This snake is smaller -> dies!
-            this.killSnake(snake, other.name);
+            this.killSnake(snake, other.name, other);
             if (!other.isDead) {
               other.kills += 1;
               if (other.isPlayer) {
@@ -1243,7 +1258,7 @@ export class GameEngine {
             break;
           } else if (massDiff > 4) {
             // Other snake is smaller -> other dies!
-            this.killSnake(other, snake.name);
+            this.killSnake(other, snake.name, snake);
             if (!snake.isDead) {
               snake.kills += 1;
               if (snake.isPlayer) {
@@ -1255,8 +1270,8 @@ export class GameEngine {
             }
           } else {
             // Virtually identical mass: mutual explosion
-            this.killSnake(snake, other.name);
-            this.killSnake(other, snake.name);
+            this.killSnake(snake, other.name, other);
+            this.killSnake(other, snake.name, snake);
             break;
           }
         }
@@ -1296,7 +1311,7 @@ export class GameEngine {
         );
 
         if (hasCollided) {
-          this.killSnake(snake, killer ? killer.name : 'Unknown');
+          this.killSnake(snake, killer ? killer.name : 'Unknown', killer);
           if (killer && !killer.isDead) {
             killer.kills += 1;
             if (killer.isPlayer) {
@@ -1312,9 +1327,13 @@ export class GameEngine {
     }
   }
 
-  public killSnake(snake: Snake, killerName: string): void {
+  public killSnake(snake: Snake, killerName: string, killerSnake?: Snake | null): void {
     if (snake.isDead) return;
     snake.isDead = true;
+
+    if (this.onSnakeKilled) {
+      this.onSnakeKilled(snake, killerSnake ?? null, killerName);
+    }
 
     // Drop luminous mass orbs along snake's former body segments matching snake's colors!
     const colors = snake.skin.colors;

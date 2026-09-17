@@ -54,6 +54,8 @@ export interface Snake {
   aiTarget?: Point | null;
   chatMessage?: string;
   chatTimer?: number;
+  policyId?: string;
+  aiArchetype?: string;
 }
 
 export interface Orb {

@@ -18,6 +18,15 @@ class SoundSystem {
   public init(): void {
     if (typeof window === 'undefined') return;
     try {
+      if (window.mindblown?.sound) {
+        if (window.mindblown.sound.on !== undefined) {
+          this.isMuted = !window.mindblown.sound.on;
+        }
+        window.mindblown.sound.onchange?.((on: boolean) => {
+          this.setMuted(!on);
+        });
+      }
+
       const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       if (AudioCtx && !this.ctx) {
         this.ctx = new AudioCtx();
@@ -58,6 +67,13 @@ class SoundSystem {
 
   public setMuted(muted: boolean): void {
     this.isMuted = muted;
+    try {
+      if (typeof window !== 'undefined' && window.mindblown?.sound) {
+        window.mindblown.sound.set(!muted);
+      }
+    } catch {
+      // Ignore
+    }
     if (this.ambientGain && this.ctx) {
       this.ambientGain.gain.setValueAtTime(muted ? 0 : this.volume * 0.04, this.ctx.currentTime);
     }
