@@ -67,6 +67,23 @@ export const SlitherGame: React.FC = () => {
   const currentRoom = useMemo(() => getArenaRoom(roomId), [roomId]);
   const { publishPresence, peers, user } = db.rooms.usePresence(currentRoom);
 
+  // Deterministic Room Host Election: lowest peerId in room is host
+  const allPeerIds = useMemo(() => {
+    const ids = Object.keys(peers || {});
+    if (user?.peerId && !ids.includes(user.peerId)) {
+      ids.push(user.peerId);
+    }
+    return ids.sort();
+  }, [peers, user?.peerId]);
+
+  const isHost = allPeerIds.length === 0 || allPeerIds[0] === user?.peerId;
+
+  useEffect(() => {
+    if (engineRef.current) {
+      engineRef.current.isHost = isHost;
+    }
+  }, [isHost]);
+
   // In-Game Multiplayer Chat state & InstantDB Room Topic pub/sub
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -77,6 +94,21 @@ export const SlitherGame: React.FC = () => {
   useEffect(() => {
     publishKillRef.current = publishKill;
   }, [publishKill]);
+
+  const publishBots = db.rooms.usePublishTopic(currentRoom, 'bots');
+  const publishBotsRef = useRef(publishBots);
+  useEffect(() => {
+    publishBotsRef.current = publishBots;
+  }, [publishBots]);
+
+  // Guests synchronize bot positions broadcasted by Room Host
+  db.rooms.useTopicEffect(currentRoom, 'bots', (event: any) => {
+    if (!event || !event.bots || !Array.isArray(event.bots)) return;
+    const eng = engineRef.current;
+    if (eng && !eng.isHost) {
+      eng.syncRemoteBots(event.bots);
+    }
+  });
 
   db.rooms.useTopicEffect(currentRoom, 'kill', (event: any) => {
     if (!event || !event.killerName) return;
@@ -183,6 +215,7 @@ export const SlitherGame: React.FC = () => {
   useEffect(() => {
     if (gameState !== 'playing') return;
 
+    let broadcastCount = 0;
     const interval = setInterval(() => {
       // If tab is visible, publish via normal interval (worker handles background)
       if (document.hidden) return;
@@ -206,6 +239,13 @@ export const SlitherGame: React.FC = () => {
         spawnTimestamp: player.spawnTimestamp || Date.now(),
         updatedAt: Date.now(),
       });
+
+      // If this client is the elected room host, broadcast authoritative bot state at ~9Hz
+      broadcastCount++;
+      if (engine.isHost && broadcastCount % 2 === 0) {
+        const snapshot = engine.getSharedBotsSnapshot();
+        publishBotsRef.current({ bots: snapshot, timestamp: Date.now() });
+      }
     }, 55);
 
     return () => clearInterval(interval);
@@ -819,6 +859,7 @@ export const SlitherGame: React.FC = () => {
             if (engineRef.current) engineRef.current.handleWheel(100);
           }}
           isTouchDevice={isTouchDevice}
+          isHost={isHost}
         />
       )}
 

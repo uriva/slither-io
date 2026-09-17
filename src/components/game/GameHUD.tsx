@@ -23,6 +23,7 @@ interface GameHUDProps {
   onZoomIn: () => void;
   onZoomOut: () => void;
   isTouchDevice: boolean;
+  isHost?: boolean;
 }
 
 export const GameHUD: React.FC<GameHUDProps> = ({
@@ -38,6 +39,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   onZoomIn,
   onZoomOut,
   isTouchDevice,
+  isHost,
 }) => {
   const [isMuted, setIsMuted] = useState(sound.getMuted());
   const player = engine.player;
@@ -117,10 +119,17 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             </div>
 
             {/* Live Multiplayer Room Indicator */}
-            <div className="flex items-center gap-1.5 pt-1 border-t border-white/5 text-[10px] font-mono text-emerald-400 font-semibold">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping inline-block" />
-              <Users className="w-3 h-3 text-emerald-400 ml-0.5" />
-              <span>{(roomId || 'sector-alpha').replace('-', ' ').toUpperCase()} ({onlineCount}/10 Humans)</span>
+            <div className="flex items-center justify-between pt-1 border-t border-white/5 text-[10px] font-mono text-emerald-400 font-semibold">
+              <div className="flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping inline-block" />
+                <Users className="w-3 h-3 text-emerald-400 ml-0.5" />
+                <span>{(roomId || 'sector-alpha').replace('-', ' ').toUpperCase()} ({onlineCount}/10)</span>
+              </div>
+              {isHost && (
+                <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                  HOST
+                </span>
+              )}
             </div>
           </div>
         </div>

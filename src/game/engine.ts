@@ -10,6 +10,7 @@ import {
   PlayerPresence,
   KeyboardState,
   KillFeedItem,
+  SharedBotState,
 } from './types';
 import {
   ARENA_RADIUS,
@@ -61,6 +62,7 @@ export class GameEngine {
   public killBanner: { text: string; timer: number } | null = null;
   public killFeed: KillFeedItem[] = [];
   public isGameOver: boolean = false;
+  public isHost: boolean = true;
   public stats: GameStats = {
     score: 0,
     length: INITIAL_SNAKE_LENGTH,
@@ -607,6 +609,7 @@ export class GameEngine {
   }
 
   private initBots(): void {
+    if (!this.isHost) return;
     // Purge dead bot snakes so active bot count replenishes properly
     for (let i = this.snakes.length - 1; i >= 0; i--) {
       const s = this.snakes[i];
@@ -784,6 +787,81 @@ export class GameEngine {
     }
   }
 
+  public getSharedBotsSnapshot(): SharedBotState[] {
+    const list: SharedBotState[] = [];
+    for (let i = 0; i < this.snakes.length; i++) {
+      const s = this.snakes[i];
+      if (!s.isPlayer && !s.isRemoteHuman && !s.isSyncedBot) {
+        list.push({
+          id: s.id,
+          name: s.name,
+          skinId: s.skin.id,
+          x: Math.round(s.head.x),
+          y: Math.round(s.head.y),
+          angle: Number(s.angle.toFixed(3)),
+          speed: Number(s.speed.toFixed(1)),
+          radius: Math.round(s.radius),
+          score: Math.round(s.score),
+          kills: s.kills,
+          isBoosting: s.isBoosting,
+          isDead: s.isDead,
+          archetype: s.aiArchetype,
+        });
+      }
+    }
+    return list;
+  }
+
+  public syncRemoteBots(bots: SharedBotState[]): void {
+    if (this.isHost) return; // Host calculates bots, never overwrites from network
+
+    const seenIds = new Set<string>();
+    for (let b = 0; b < bots.length; b++) {
+      const data = bots[b];
+      seenIds.add(data.id);
+
+      let bot = this.snakes.find((s) => s.id === data.id);
+      if (bot) {
+        if (bot.isDead) {
+          if (!data.isDead) bot.isDead = false;
+          else continue;
+        }
+        if (data.isDead) {
+          this.killSnake(bot, 'Eliminated');
+          continue;
+        }
+      } else {
+        if (data.isDead) continue;
+        const skin = SKINS.find((sk) => sk.id === data.skinId) || SKINS[0];
+        bot = this.createSnake(data.id, data.name, false, skin, data.x, data.y, INITIAL_SNAKE_LENGTH, data.angle);
+        bot.isSyncedBot = true;
+        bot.aiArchetype = data.archetype;
+        this.snakes.push(bot);
+      }
+
+      bot.name = data.name;
+      bot.score = data.score;
+      bot.kills = data.kills;
+      bot.isBoosting = data.isBoosting;
+      bot.speed = data.speed;
+      bot.radius = data.radius;
+      bot.targetAngle = data.angle;
+
+      // Smooth interpolation towards host's authoritative position
+      bot.head.x += (data.x - bot.head.x) * 0.4;
+      bot.head.y += (data.y - bot.head.y) * 0.4;
+      bot.angle = data.angle;
+    }
+
+    // Remove stale synced bots
+    for (let i = this.snakes.length - 1; i >= 0; i--) {
+      const s = this.snakes[i];
+      if (s.isSyncedBot && !seenIds.has(s.id)) {
+        this.snakes.splice(i, 1);
+      }
+    }
+  }
+
   public addChatMessage(snakeId: string, text: string, senderName?: string): void {
     let target = this.snakes.find((s) => s.id === snakeId);
     if (!target && this.player && (this.player.id === snakeId || this.player.name === senderName)) {
@@ -862,14 +940,16 @@ export class GameEngine {
       sound.setBoosting(wantsBoost);
     }
 
-    // Update Bot AI
-    for (let i = 0; i < this.snakes.length; i++) {
-      const snake = this.snakes[i];
-      if (!snake.isPlayer && !snake.isDead) {
-        if (this.customBotUpdate) {
-          this.customBotUpdate(snake, this.snakes, this.bodyGrid, this.foodGrid);
-        } else {
-          BotAIController.updateBot(snake, this.snakes, this.bodyGrid, this.foodGrid);
+    // Update Bot AI (Only Room Host computes bot decisions; guests interpolate synchronized bot packets)
+    if (this.isHost) {
+      for (let i = 0; i < this.snakes.length; i++) {
+        const snake = this.snakes[i];
+        if (!snake.isPlayer && !snake.isRemoteHuman && !snake.isSyncedBot && !snake.isDead) {
+          if (this.customBotUpdate) {
+            this.customBotUpdate(snake, this.snakes, this.bodyGrid, this.foodGrid);
+          } else {
+            BotAIController.updateBot(snake, this.snakes, this.bodyGrid, this.foodGrid);
+          }
         }
       }
     }
@@ -902,7 +982,7 @@ export class GameEngine {
       const s = this.snakes[i];
       if (!s.isPlayer && !s.isDead) activeBots++;
     }
-    if (this.autoReplenishBots && activeBots < BOT_COUNT) {
+    if (this.isHost && this.autoReplenishBots && activeBots < BOT_COUNT) {
       this.initBots();
     }
 

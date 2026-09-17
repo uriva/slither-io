@@ -56,10 +56,27 @@ export interface Snake {
   chatTimer?: number;
   policyId?: string;
   aiArchetype?: string;
+  isSyncedBot?: boolean;
   trailX?: Float32Array;
   trailY?: Float32Array;
   trailHeadIdx?: number;
   trailDistAcc?: number;
+}
+
+export interface SharedBotState {
+  id: string;
+  name: string;
+  skinId: string;
+  x: number;
+  y: number;
+  angle: number;
+  speed: number;
+  radius: number;
+  score: number;
+  kills: number;
+  isBoosting: boolean;
+  isDead: boolean;
+  archetype?: string;
 }
 
 export interface KillFeedItem {
