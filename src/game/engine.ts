@@ -22,6 +22,7 @@ import {
   BOOST_SPEED,
   TURN_SPEED,
   BOOST_TURN_SPEED,
+  SEGMENT_SPACING,
   MIN_BOOST_MASS,
   INITIAL_FOOD_COUNT,
   PREY_COUNT,
@@ -315,8 +316,8 @@ export class GameEngine {
 
   public getSnakeTurnSpeed(snake: Snake): number {
     const baseTurn = snake.isBoosting ? BOOST_TURN_SPEED : TURN_SPEED;
-    // Keep tight, nimble handling for all sizes (never drops below 88% of base)
-    const sizeFactor = Math.max(0.88, 1.0 - (snake.radius - BASE_RADIUS) * 0.003);
+    // In Slither.io, larger snakes have a wider, more majestic turn radius
+    const sizeFactor = Math.max(0.55, 1.0 / (1.0 + (snake.radius - BASE_RADIUS) * 0.022));
     return baseTurn * sizeFactor;
   }
 
@@ -562,7 +563,7 @@ export class GameEngine {
           MAX_RADIUS,
           BASE_RADIUS + (initialLength - INITIAL_SNAKE_LENGTH) * 0.22 + Math.sqrt(Math.max(0, initialLength * 2)) * 0.44
         );
-    const spacing = Math.max(7, initialRadius * 0.55);
+    const spacing = SEGMENT_SPACING;
     const body: { x: number; y: number; radius: number }[] = [];
 
     for (let i = 0; i < initialLength; i++) {
@@ -574,7 +575,7 @@ export class GameEngine {
       });
     }
 
-    const CAPACITY = 2048;
+    const CAPACITY = 8192;
     const MASK = CAPACITY - 1;
     const STEP = 3.5;
     const trailX = new Float32Array(CAPACITY);
@@ -1152,18 +1153,19 @@ export class GameEngine {
     );
 
     // 5. Body Segment Kinematics (Path History Footprint - Rigid Against Knots & Loops)
-    const CAPACITY = 2048;
-    const MASK = 2047;
+    const CAPACITY = 8192;
+    const MASK = CAPACITY - 1;
     const STEP = 3.5;
 
-    if (!snake.trailX || !snake.trailY) {
+    if (!snake.trailX || !snake.trailY || snake.trailX.length !== CAPACITY) {
       snake.trailX = new Float32Array(CAPACITY);
       snake.trailY = new Float32Array(CAPACITY);
       snake.trailHeadIdx = 0;
       snake.trailDistAcc = 0;
       for (let i = 0; i < CAPACITY; i++) {
-        snake.trailX[i] = snake.head.x - Math.cos(snake.angle) * (i * STEP);
-        snake.trailY[i] = snake.head.y - Math.sin(snake.angle) * (i * STEP);
+        const idx = (0 - i + CAPACITY) & MASK;
+        snake.trailX[idx] = snake.head.x - Math.cos(snake.angle) * (i * STEP);
+        snake.trailY[idx] = snake.head.y - Math.sin(snake.angle) * (i * STEP);
       }
     }
 
@@ -1190,7 +1192,7 @@ export class GameEngine {
       snake.trailHeadIdx = headIdx;
     }
 
-    const spacing = Math.max(7, snake.radius * 0.55);
+    const spacing = SEGMENT_SPACING;
 
     // Tail Growth Physics:
     // When eating mass, tail stays frozen on the ground while head advances,
@@ -1212,7 +1214,8 @@ export class GameEngine {
     while (snake.body.length < desiredJoints) {
       const idx = snake.body.length;
       const taper = Math.max(0.40, 1 - (idx / desiredJoints) * 0.60);
-      snake.body.push({ x: snake.head.x, y: snake.head.y, radius: snake.radius * taper });
+      const lastSeg = snake.body[snake.body.length - 1] || snake.head;
+      snake.body.push({ x: lastSeg.x, y: lastSeg.y, radius: snake.radius * taper });
     }
     while (snake.body.length > desiredJoints && snake.body.length > INITIAL_SNAKE_LENGTH) {
       snake.body.pop();
@@ -1223,12 +1226,17 @@ export class GameEngine {
     snake.body[0].radius = snake.radius;
 
     const bodyLen = snake.body.length;
+    const totalPhysicalDist = (snake.currentLength - 1) * spacing;
+
     for (let i = 1; i < bodyLen; i++) {
       const segFraction = i / (bodyLen - 1);
-      const targetDist = segFraction * (snake.currentLength - 1) * spacing + distAcc;
-      const trailPos = targetDist / STEP;
-      const step0 = Math.floor(trailPos);
-      const frac = trailPos - step0;
+      const targetDist = segFraction * totalPhysicalDist;
+      // Current head is distAcc ahead of trailX[headIdx], so trail distance is targetDist - distAcc
+      const trailDist = targetDist - distAcc;
+      const trailPos = trailDist / STEP;
+      const maxSteps = CAPACITY - 2;
+      const step0 = Math.max(0, Math.min(maxSteps, Math.floor(trailPos)));
+      const frac = Math.max(0, Math.min(1.0, trailPos - step0));
 
       const idx0 = (headIdx - step0 + CAPACITY) & MASK;
       const idx1 = (headIdx - step0 - 1 + CAPACITY) & MASK;
@@ -1968,6 +1976,9 @@ export class GameEngine {
       for (let i = 1; i < bodyLen; i += 2) {
         ctx.lineTo(snake.body[i].x, snake.body[i].y);
       }
+      if ((bodyLen - 1) % 2 !== 0) {
+        ctx.lineTo(snake.body[bodyLen - 1].x, snake.body[bodyLen - 1].y);
+      }
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
 
@@ -2004,6 +2015,9 @@ export class GameEngine {
     ctx.moveTo(snake.body[bodyLen - 1].x, snake.body[bodyLen - 1].y);
     for (let i = bodyLen - 2; i >= 0; i -= spineStep) {
       ctx.lineTo(snake.body[i].x, snake.body[i].y);
+    }
+    if (spineStep > 1 && (bodyLen - 2) % spineStep !== 0) {
+      ctx.lineTo(snake.body[0].x, snake.body[0].y);
     }
     // Sleek continuous body stroke (never balloons at tail tip)
     ctx.lineWidth = Math.max(7, snake.radius * 1.35);
