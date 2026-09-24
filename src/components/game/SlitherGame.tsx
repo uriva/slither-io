@@ -67,22 +67,60 @@ export const SlitherGame: React.FC = () => {
   const currentRoom = useMemo(() => getArenaRoom(roomId), [roomId]);
   const { publishPresence, peers, user } = db.rooms.usePresence(currentRoom);
 
-  // Deterministic Room Host Election: lowest peerId in room is host
-  const allPeerIds = useMemo(() => {
-    const ids = Object.keys(peers || {});
-    if (user?.peerId && !ids.includes(user.peerId)) {
+  // Deterministic Room Host Election: only active playing peers with recent presence can host
+  const activePlayingPeerIds = useMemo(() => {
+    const now = Date.now();
+    const ids: string[] = [];
+    if (peers) {
+      for (const [pId, pData] of Object.entries(peers)) {
+        if (
+          pData &&
+          pData.head &&
+          !pData.isDead &&
+          pData.updatedAt &&
+          now - pData.updatedAt < 3500
+        ) {
+          ids.push(pId);
+        }
+      }
+    }
+    if (user?.peerId && gameState === 'playing' && !ids.includes(user.peerId)) {
       ids.push(user.peerId);
     }
     return ids.sort();
-  }, [peers, user?.peerId]);
+  }, [peers, user?.peerId, gameState]);
 
-  const isHost = allPeerIds.length === 0 || allPeerIds[0] === user?.peerId;
+  const isElectedHost = activePlayingPeerIds.length === 0 || activePlayingPeerIds[0] === user?.peerId;
+
+  // Watchdog timestamp of last received bot topic packet
+  const lastBotPacketAtRef = useRef<number>(0);
+  const [isFallbackHost, setIsFallbackHost] = useState(false);
+
+  // Overall host status: either elected host OR fallback host when elected host isn't broadcasting
+  const isHost = isElectedHost || isFallbackHost;
 
   useEffect(() => {
     if (engineRef.current) {
-      engineRef.current.isHost = isHost;
+      engineRef.current.setIsHost(isHost);
     }
   }, [isHost]);
+
+  // Host watchdog: if elected host stops broadcasting for >2s, promote client to fallback host
+  useEffect(() => {
+    if (gameState !== 'playing') {
+      setIsFallbackHost(false);
+      return;
+    }
+    const interval = setInterval(() => {
+      if (!isElectedHost) {
+        const timeSincePacket = Date.now() - lastBotPacketAtRef.current;
+        if (timeSincePacket > 2000 && !isFallbackHost) {
+          setIsFallbackHost(true);
+        }
+      }
+    }, 500);
+    return () => clearInterval(interval);
+  }, [gameState, isElectedHost, isFallbackHost]);
 
   // In-Game Multiplayer Chat state & InstantDB Room Topic pub/sub
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -104,6 +142,10 @@ export const SlitherGame: React.FC = () => {
   // Guests synchronize bot positions broadcasted by Room Host
   db.rooms.useTopicEffect(currentRoom, 'bots', (event: any) => {
     if (!event || !event.bots || !Array.isArray(event.bots)) return;
+    lastBotPacketAtRef.current = Date.now();
+    if (isFallbackHost) {
+      setIsFallbackHost(false);
+    }
     const eng = engineRef.current;
     if (eng && !eng.isHost) {
       eng.syncRemoteBots(event.bots);
@@ -763,6 +805,7 @@ export const SlitherGame: React.FC = () => {
     canvasRef.current?.focus();
 
     handleResize();
+    engine.setIsHost(isHost);
     engine.start(name, skinId, playerIdRef.current);
     try {
       window.mindblown?.run?.start();

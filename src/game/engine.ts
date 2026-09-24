@@ -614,8 +614,21 @@ export class GameEngine {
     };
   }
 
+  public setIsHost(isHost: boolean): void {
+    if (this.isHost === isHost) return;
+    this.isHost = isHost;
+    if (isHost) {
+      // Transition any existing synced bots into locally controlled bots
+      for (let i = 0; i < this.snakes.length; i++) {
+        const s = this.snakes[i];
+        if (s.isSyncedBot) {
+          s.isSyncedBot = false;
+        }
+      }
+    }
+  }
+
   private initBots(): void {
-    if (!this.isHost) return;
     // Purge dead bot snakes so active bot count replenishes properly
     for (let i = this.snakes.length - 1; i >= 0; i--) {
       const s = this.snakes[i];
@@ -653,7 +666,11 @@ export class GameEngine {
 
       const botLen = Math.floor(INITIAL_SNAKE_LENGTH + Math.random() * 50 + (Math.random() < 0.15 ? 90 : 0));
       const bot = this.createSnake(`bot-${Date.now()}-${i}`, name, false, skin, bx, by, botLen);
-      bot.aiArchetype = BotAIController.getRandomArchetype();
+      try {
+        bot.aiArchetype = NeuralBotController.getRandomArchetype().id;
+      } catch {
+        bot.aiArchetype = BotAIController.getRandomArchetype();
+      }
       this.snakes.push(bot);
     }
   }
@@ -820,6 +837,15 @@ export class GameEngine {
 
   public syncRemoteBots(bots: SharedBotState[]): void {
     if (this.isHost) return; // Host calculates bots, never overwrites from network
+    if (!bots || bots.length === 0) return;
+
+    // When actively receiving synced bots from host, clean up surplus unsynced local bots
+    for (let i = this.snakes.length - 1; i >= 0; i--) {
+      const s = this.snakes[i];
+      if (!s.isPlayer && !s.isRemoteHuman && !s.isSyncedBot) {
+        this.snakes.splice(i, 1);
+      }
+    }
 
     const seenIds = new Set<string>();
     for (let b = 0; b < bots.length; b++) {
@@ -946,15 +972,22 @@ export class GameEngine {
       sound.setBoosting(wantsBoost);
     }
 
-    // Update Bot AI (Only Room Host computes bot decisions; guests interpolate synchronized bot packets)
-    if (this.isHost) {
+    // Update Bot AI (Host calculates bots, or fallback to local AI if no active synced bots from host)
+    const hasSyncedBots = this.snakes.some((s) => s.isSyncedBot && !s.isDead);
+    const shouldComputeBots = this.isHost || !hasSyncedBots;
+
+    if (shouldComputeBots) {
       for (let i = 0; i < this.snakes.length; i++) {
         const snake = this.snakes[i];
         if (!snake.isPlayer && !snake.isRemoteHuman && !snake.isSyncedBot && !snake.isDead) {
           if (this.customBotUpdate) {
             this.customBotUpdate(snake, this.snakes, this.bodyGrid, this.foodGrid);
           } else {
-            BotAIController.updateBot(snake, this.snakes, this.bodyGrid, this.foodGrid);
+            try {
+              NeuralBotController.updateBot(snake, this.snakes, this.bodyGrid, this.foodGrid);
+            } catch {
+              BotAIController.updateBot(snake, this.snakes, this.bodyGrid, this.foodGrid);
+            }
           }
         }
       }
@@ -988,7 +1021,7 @@ export class GameEngine {
       const s = this.snakes[i];
       if (!s.isPlayer && !s.isDead) activeBots++;
     }
-    if (this.isHost && this.autoReplenishBots && activeBots < BOT_COUNT) {
+    if (shouldComputeBots && this.autoReplenishBots && activeBots < BOT_COUNT) {
       this.initBots();
     }
 
