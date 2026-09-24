@@ -561,7 +561,7 @@ export class GameEngine {
       ? BASE_RADIUS
       : Math.min(
           MAX_RADIUS,
-          BASE_RADIUS + (initialLength - INITIAL_SNAKE_LENGTH) * 0.22 + Math.sqrt(Math.max(0, initialLength * 2)) * 0.44
+          BASE_RADIUS * (1.0 + Math.max(0, initialLength - INITIAL_SNAKE_LENGTH) * 0.009)
         );
     const spacing = SEGMENT_SPACING;
     const body: { x: number; y: number; radius: number }[] = [];
@@ -798,9 +798,11 @@ export class GameEngine {
         220,
         INITIAL_SNAKE_LENGTH + Math.floor(Math.sqrt(Math.max(0, remoteSnake.score)) * 3.2)
       );
+      const remoteScale = 1.0 + Math.max(0, remoteSnake.targetLength - INITIAL_SNAKE_LENGTH) * 0.009;
+      const remoteExtraBonus = Math.sqrt(Math.max(0, remoteSnake.score - 4500)) * 0.05;
       remoteSnake.radius = Math.min(
         MAX_RADIUS,
-        BASE_RADIUS + (remoteSnake.targetLength - INITIAL_SNAKE_LENGTH) * 0.22 + Math.sqrt(Math.max(0, remoteSnake.score)) * 0.44
+        BASE_RADIUS * remoteScale + remoteExtraBonus
       );
       remoteSnake.targetAngle = peer.angle;
 
@@ -1044,7 +1046,7 @@ export class GameEngine {
       this.camera.y += (this.player.head.y - this.camera.y) * lerp;
 
       // Base zoom scales with mass, userZoom modifies it via mouse wheel
-      this.camera.baseZoom = Math.max(0.32, 1.0 / (1.0 + (this.player.radius - BASE_RADIUS) * 0.020));
+      this.camera.baseZoom = Math.max(0.38, 1.0 / (1.0 + (this.player.radius - BASE_RADIUS) * 0.032));
       this.camera.targetZoom = this.camera.baseZoom * this.camera.userZoom;
     } else {
       this.camera.targetZoom = this.camera.baseZoom * this.camera.userZoom;
@@ -1141,11 +1143,12 @@ export class GameEngine {
     // 4. Update Dynamic Radius and Target Length
     // Logarithmic segment scaling: capped at 220 visual joints so performance never drops!
     // In Slither.io, snakes become noticeably wider as they get longer and heavier!
-    const lengthBonus = (snake.targetLength - INITIAL_SNAKE_LENGTH) * 0.22;
-    const scoreBonus = Math.sqrt(Math.max(0, snake.score)) * 0.44;
+    // In Slither.io, width scales gradually with length: scale = 1.0 + (targetLength - 16) * 0.009
+    const scale = 1.0 + Math.max(0, snake.targetLength - INITIAL_SNAKE_LENGTH) * 0.009;
+    const extraMassBonus = Math.sqrt(Math.max(0, snake.score - 4500)) * 0.05;
     snake.radius = Math.min(
       MAX_RADIUS,
-      BASE_RADIUS + lengthBonus + scoreBonus
+      BASE_RADIUS * scale + extraMassBonus
     );
     snake.targetLength = Math.min(
       220,
