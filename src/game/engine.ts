@@ -32,7 +32,6 @@ import {
 } from './constants';
 import { SpatialGrid, GridItem } from './spatialGrid';
 import { BotAIController } from './botAI';
-import { NeuralBotController } from './neuralAI';
 import { sound } from './audio';
 
 interface BodySegmentItem extends GridItem {
@@ -557,7 +556,12 @@ export class GameEngine {
         angle = Math.random() * Math.PI * 2;
       }
     }
-    const initialRadius = isPlayer ? BASE_RADIUS : Math.min(MAX_RADIUS, BASE_RADIUS + Math.sqrt(Math.max(0, initialLength * 2)) * 0.42);
+    const initialRadius = isPlayer
+      ? BASE_RADIUS
+      : Math.min(
+          MAX_RADIUS,
+          BASE_RADIUS + (initialLength - INITIAL_SNAKE_LENGTH) * 0.22 + Math.sqrt(Math.max(0, initialLength * 2)) * 0.44
+        );
     const spacing = Math.max(7, initialRadius * 0.55);
     const body: { x: number; y: number; radius: number }[] = [];
 
@@ -666,11 +670,7 @@ export class GameEngine {
 
       const botLen = Math.floor(INITIAL_SNAKE_LENGTH + Math.random() * 50 + (Math.random() < 0.15 ? 90 : 0));
       const bot = this.createSnake(`bot-${Date.now()}-${i}`, name, false, skin, bx, by, botLen);
-      try {
-        bot.aiArchetype = NeuralBotController.getRandomArchetype().id;
-      } catch {
-        bot.aiArchetype = BotAIController.getRandomArchetype();
-      }
+      bot.aiArchetype = BotAIController.getRandomArchetype();
       this.snakes.push(bot);
     }
   }
@@ -793,12 +793,15 @@ export class GameEngine {
       remoteSnake.kills = peer.kills || remoteSnake.kills;
       remoteSnake.isBoosting = !!peer.isBoosting;
       remoteSnake.speed = peer.speed || remoteSnake.speed;
-      remoteSnake.radius = peer.radius || remoteSnake.radius;
-      remoteSnake.targetAngle = peer.angle;
       remoteSnake.targetLength = Math.min(
         220,
         INITIAL_SNAKE_LENGTH + Math.floor(Math.sqrt(Math.max(0, remoteSnake.score)) * 3.2)
       );
+      remoteSnake.radius = Math.min(
+        MAX_RADIUS,
+        BASE_RADIUS + (remoteSnake.targetLength - INITIAL_SNAKE_LENGTH) * 0.22 + Math.sqrt(Math.max(0, remoteSnake.score)) * 0.44
+      );
+      remoteSnake.targetAngle = peer.angle;
 
       // Smooth interpolation toward peer head position
       if (!remoteSnake.prevHead) {
@@ -983,11 +986,7 @@ export class GameEngine {
           if (this.customBotUpdate) {
             this.customBotUpdate(snake, this.snakes, this.bodyGrid, this.foodGrid);
           } else {
-            try {
-              NeuralBotController.updateBot(snake, this.snakes, this.bodyGrid, this.foodGrid);
-            } catch {
-              BotAIController.updateBot(snake, this.snakes, this.bodyGrid, this.foodGrid);
-            }
+            BotAIController.updateBot(snake, this.snakes, this.bodyGrid, this.foodGrid);
           }
         }
       }
@@ -1044,7 +1043,7 @@ export class GameEngine {
       this.camera.y += (this.player.head.y - this.camera.y) * lerp;
 
       // Base zoom scales with mass, userZoom modifies it via mouse wheel
-      this.camera.baseZoom = Math.max(0.38, 1.0 / (1.0 + (this.player.radius - BASE_RADIUS) * 0.024));
+      this.camera.baseZoom = Math.max(0.32, 1.0 / (1.0 + (this.player.radius - BASE_RADIUS) * 0.020));
       this.camera.targetZoom = this.camera.baseZoom * this.camera.userZoom;
     } else {
       this.camera.targetZoom = this.camera.baseZoom * this.camera.userZoom;
@@ -1140,9 +1139,12 @@ export class GameEngine {
 
     // 4. Update Dynamic Radius and Target Length
     // Logarithmic segment scaling: capped at 220 visual joints so performance never drops!
+    // In Slither.io, snakes become noticeably wider as they get longer and heavier!
+    const lengthBonus = (snake.targetLength - INITIAL_SNAKE_LENGTH) * 0.22;
+    const scoreBonus = Math.sqrt(Math.max(0, snake.score)) * 0.44;
     snake.radius = Math.min(
       MAX_RADIUS,
-      BASE_RADIUS + Math.sqrt(Math.max(0, snake.score)) * 0.42
+      BASE_RADIUS + lengthBonus + scoreBonus
     );
     snake.targetLength = Math.min(
       220,

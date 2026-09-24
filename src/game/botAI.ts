@@ -57,16 +57,46 @@ export class BotAIController {
     if (distFromCenterSq > ARENA_DANGER_SQ) {
       bot.targetAngle = Math.atan2(-headY, -headX);
       bot.isBoosting = canBoost && distFromCenterSq > (ARENA_RADIUS - 200) * (ARENA_RADIUS - 200);
+      bot.aiTarget = null;
       return;
     }
 
-    // 2. Collision Avoidance Reflex
+    // 2. Clear waypoint when reached or passed to prevent tight orbit twirling!
+    if (bot.aiTarget) {
+      const tDx = bot.aiTarget.x - headX;
+      const tDy = bot.aiTarget.y - headY;
+      const distSq = tDx * tDx + tDy * tDy;
+      const reachDist = bot.radius * 1.5 + 24;
+      // If target is within reach OR target is behind the snake within 80px, clear it
+      const dotForward = Math.cos(bot.angle) * tDx + Math.sin(bot.angle) * tDy;
+      if (distSq <= reachDist * reachDist || (dotForward < 0 && distSq < 80 * 80)) {
+        bot.aiTarget = null;
+      }
+    }
+
+    // 3. Collision Avoidance Reflex
     // Immediate danger triggers instant reflex; general path clearance evaluates at 30Hz
     const isReflexTick = bot.aiTimer % 2 === 0;
     const safetyMargin = archetype === 'punisher' || archetype === 'conservative_giant' ? 4.8 : 4.1;
     const lookAheadDist = bot.radius * (bot.isBoosting ? safetyMargin * 1.25 : safetyMargin);
 
-    if (bodyGrid.hasObstacle(headX, headY, lookAheadDist + 35, bot.id)) {
+    // Check if any obstacle (body segments OR nearby snakes' heads) is in front of us
+    let hasNearbyThreat = bodyGrid.hasObstacle(headX, headY, lookAheadDist + 45, bot.id);
+    if (!hasNearbyThreat) {
+      for (let j = 0; j < allSnakes.length; j++) {
+        const s = allSnakes[j];
+        if (s.id === bot.id || s.isDead) continue;
+        const dx = s.head.x - headX;
+        const dy = s.head.y - headY;
+        const headDangerDist = lookAheadDist + s.radius + 35;
+        if (dx * dx + dy * dy < headDangerDist * headDangerDist) {
+          hasNearbyThreat = true;
+          break;
+        }
+      }
+    }
+
+    if (hasNearbyThreat) {
       let bestClearAngle: number | null = null;
       let urgentDanger = false;
       let maxClearSteps = -1;
@@ -91,19 +121,17 @@ export class BotAIController {
             break;
           }
 
-          // Actively avoid other snakes' heads (never ram or suicide into opponent faces!)
+          // Actively avoid other snakes' heads and necks (never ram or suicide into opponent faces!)
           for (let j = 0; j < allSnakes.length; j++) {
             const s = allSnakes[j];
             if (s.id === bot.id || s.isDead) continue;
             const dhx = rx - s.head.x;
             const dhy = ry - s.head.y;
-            const safeHeadDist = bot.radius + s.radius + 18;
+            const safeHeadDist = bot.radius + s.radius + 28;
             if (dhx * dhx + dhy * dhy <= safeHeadDist * safeHeadDist) {
-              if (s.score >= bot.score - 5) {
-                clear = false;
-                if (step === 1) urgentDanger = true;
-                break;
-              }
+              clear = false;
+              if (step === 1) urgentDanger = true;
+              break;
             }
           }
           if (!clear) break;
@@ -121,6 +149,7 @@ export class BotAIController {
       if (urgentDanger || (isReflexTick && (bestClearAngle !== null || maxClearSteps < 3))) {
         bot.targetAngle = bestClearAngle !== null ? bestClearAngle : bestClearanceAngle;
         bot.isBoosting = false;
+        bot.aiTarget = null;
         return;
       }
     }
@@ -210,14 +239,20 @@ export class BotAIController {
       if (nearestOpponent) {
         const massDelta = bot.score - nearestOpponent.score;
 
-        // If opponent is bigger, equal, or dangerous: DO NOT SUICIDE! Maintain safe perimeter!
-        if (massDelta < 15 && oppDist < 350) {
-          const fleeAngle = Math.atan2(headY - nearestOpponent.head.y, headX - nearestOpponent.head.x);
+        // If opponent is bigger, equal, or close: peel away laterally! Never ram head-first!
+        if (massDelta < 20 && oppDist < 360) {
+          const angleToOpp = Math.atan2(nearestOpponent.head.y - headY, nearestOpponent.head.x - headX);
+          let relAngle = angleToOpp - bot.angle;
+          while (relAngle < -Math.PI) relAngle += Math.PI * 2;
+          while (relAngle > Math.PI) relAngle -= Math.PI * 2;
+          // Peel laterally (perpendicular / tangential escape) away from opponent
+          const peelSign = relAngle >= 0 ? -1 : 1;
+          const escapeAngle = bot.angle + peelSign * 1.75;
           chosenTarget = {
-            x: headX + Math.cos(fleeAngle) * 400,
-            y: headY + Math.sin(fleeAngle) * 400,
+            x: headX + Math.cos(escapeAngle) * 450,
+            y: headY + Math.sin(escapeAngle) * 450,
           };
-          wantBoost = canBoost && oppDist < 180; // Panic boost to escape if pressed
+          wantBoost = canBoost && oppDist < 200;
         } else if (massDelta >= 25 && oppDist < 320 && bot.score > 160) {
           // Offensive Enclosure: Wrap around smaller opponent in an inward spiral
           const angleToOpp = Math.atan2(nearestOpponent.head.y - headY, nearestOpponent.head.x - headX);
@@ -227,7 +262,7 @@ export class BotAIController {
             y: nearestOpponent.head.y + Math.sin(orbitAngle) * 160,
           };
           wantBoost = canBoost && oppDist > 160;
-        } else if (massDelta >= 15 && oppDist < 350) {
+        } else if (massDelta >= 20 && oppDist < 350) {
           // Clear mass advantage: cautious cut-off from safe distance
           const oppAngle = nearestOpponent.angle;
           const leadDist = Math.min(130, oppDist * 0.45);
@@ -250,7 +285,7 @@ export class BotAIController {
       // Default: Food foraging
       if (!chosenTarget) {
         BotAIController.foodQueryList.length = 0;
-        foodGrid.queryInto(headX, headY, 500, BotAIController.foodQueryList);
+        foodGrid.queryInto(headX, headY, 550, BotAIController.foodQueryList);
 
         if (BotAIController.foodQueryList.length > 0) {
           let bestOrb: Orb | null = null;
@@ -278,10 +313,21 @@ export class BotAIController {
         }
       }
 
-      if (chosenTarget) {
-        bot.aiTarget = chosenTarget;
-        bot.targetAngle = Math.atan2(chosenTarget.y - headY, chosenTarget.x - headX);
+      // Active arena migration / cruising: wander forward with gentle smooth sway
+      if (!chosenTarget) {
+        const hash = bot.id.charCodeAt(0) || 1;
+        const wanderNoise = Math.sin(bot.aiTimer * 0.04 + hash) * 0.35;
+        const cruiseAngle = bot.angle + wanderNoise;
+        const cruiseDist = 500 + Math.random() * 200;
+        chosenTarget = {
+          x: headX + Math.cos(cruiseAngle) * cruiseDist,
+          y: headY + Math.sin(cruiseAngle) * cruiseDist,
+        };
+        wantBoost = false;
       }
+
+      bot.aiTarget = chosenTarget;
+      bot.targetAngle = Math.atan2(chosenTarget.y - headY, chosenTarget.x - headX);
       bot.isBoosting = wantBoost && canBoost;
     } else if (bot.aiTarget) {
       bot.targetAngle = Math.atan2(bot.aiTarget.y - headY, bot.aiTarget.x - headX);
