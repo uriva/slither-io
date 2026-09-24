@@ -2017,8 +2017,12 @@ export class GameEngine {
     ctx.fillStyle = skin.headColor;
     ctx.fill();
 
-    // 5. Draw Eyes (LOD: skip for distant bots when zoomed out to save 200 circle paths)
-    if (!isZoomedOut || isNearCamera) {
+    // 5. Draw Eyes (LOD: keep for nearby/player/leader, plus any snake large
+    // enough on screen to read — skips sub-pixel eyes on tiny distant bots)
+    const isTopLeaderEarly = this.leaderboard.length > 0 && this.leaderboard[0].id === snake.id;
+    const screenHeadRadius = snake.radius * this.camera.zoom;
+    const drawEyes = !isZoomedOut || isNearCamera || isTopLeaderEarly || screenHeadRadius > 8;
+    if (drawEyes) {
       const eyeAngle = snake.angle;
       const eyeDist = snake.radius * 0.65;
       const eyeRadius = snake.radius * 0.38;
@@ -2051,7 +2055,7 @@ export class GameEngine {
     }
 
     // 6. Draw Crown if #1 on Leaderboard
-    const isTopLeader = this.leaderboard.length > 0 && this.leaderboard[0].id === snake.id;
+    const isTopLeader = isTopLeaderEarly;
     if (isTopLeader) {
       ctx.save();
       ctx.translate(head.x, head.y - snake.radius * 1.5);

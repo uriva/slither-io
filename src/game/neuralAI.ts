@@ -1,6 +1,6 @@
 import { Snake, Orb } from './types';
 import { SpatialGrid, GridItem } from './spatialGrid';
-import { ARENA_RADIUS, MIN_BOOST_MASS } from './constants';
+import { ARENA_RADIUS, MIN_BOOST_MASS, BOOST_TURN_SPEED } from './constants';
 import weightsData from './neuralWeights.json';
 
 interface BodySegmentItem extends GridItem {
@@ -34,10 +34,11 @@ export class NeuralBotController {
   private static archetypes: Map<string, NeuralArchetype> = new Map();
   private static archetypeList: NeuralArchetype[] = [];
   private static foodQueryBuffer: (Orb & GridItem)[] = [];
-  private static tempVec = new Float32Array(32);
+  private static tempVec = new Float32Array(40);
   private static tempH1 = new Float32Array(64);
   private static tempH2 = new Float32Array(32);
   private static isInitialized = false;
+  private static lastAngleById: Map<string, { angle: number; timer: number }> = new Map();
 
   public static init(): void {
     if (this.isInitialized) return;
@@ -45,7 +46,17 @@ export class NeuralBotController {
     for (const [id, raw] of Object.entries(weightsData)) {
       const w = raw.weights;
 
-      const w1 = w.w1.map((row: number[]) => new Float32Array(row));
+      // Backward compat: pre-encirclement weights are 32-wide; zero-pad the
+      // 8 new perception dims (turn-rate, headings, own-body) so old nets
+      // run unchanged until retrained.
+      const padRow = (row: number[]): Float32Array => {
+        if (row.length >= 40) return new Float32Array(row);
+        const padded = new Float32Array(40);
+        padded.set(row);
+        return padded;
+      };
+
+      const w1 = w.w1.map(padRow);
       const b1 = new Float32Array(w.b1);
       const w2 = w.w2.map((row: number[]) => new Float32Array(row));
       const b2 = new Float32Array(w.b2);
@@ -126,7 +137,7 @@ export class NeuralBotController {
       for (let i = 0; i < 64; i++) {
         let sum = arch.b1[i];
         const wRow = arch.w1[i];
-        for (let j = 0; j < 32; j++) {
+        for (let j = 0; j < 40; j++) {
           sum += this.tempVec[j] * wRow[j];
         }
         this.tempH1[i] = sum > 0 ? sum : 0;
@@ -214,12 +225,32 @@ export class NeuralBotController {
 
     let idx = 0;
 
-    // Self kinematics (5 features)
+    // Self kinematics (6 features, incl. turn-rate memory for coil persistence).
+    // turnRate = fraction of max turn authority used per frame, so it is
+    // independent of the 14-frame tactical cadence.
+    let turnRate = 0;
+    const last = this.lastAngleById.get(bot.id);
+    if (last !== undefined) {
+      const curTimer = typeof bot.aiTimer === 'number' ? bot.aiTimer : last.timer + 1;
+      const frames = Math.max(1, curTimer - last.timer);
+      let d = bot.angle - last.angle;
+      while (d < -Math.PI) d += Math.PI * 2;
+      while (d > Math.PI) d -= Math.PI * 2;
+      turnRate = Math.max(-1.0, Math.min(1.0, d / frames / BOOST_TURN_SPEED));
+      this.lastAngleById.set(bot.id, { angle: bot.angle, timer: curTimer });
+    } else {
+      const curTimer = typeof bot.aiTimer === 'number' ? bot.aiTimer : 0;
+      this.lastAngleById.set(bot.id, { angle: bot.angle, timer: curTimer });
+    }
+    if (this.lastAngleById.size > 500) this.lastAngleById.clear();
+    if (bot.isDead) this.lastAngleById.delete(bot.id);
+
     outVec[idx++] = Math.cos(bot.angle);
     outVec[idx++] = Math.sin(bot.angle);
     outVec[idx++] = bot.speed / 7.2;
     outVec[idx++] = Math.min(1.0, bot.score / 1000);
     outVec[idx++] = bot.radius / 42;
+    outVec[idx++] = turnRate;
 
     // Boundary (3 features)
     outVec[idx++] = Math.min(1.0, distToBoundary / ARENA_RADIUS);
@@ -247,11 +278,13 @@ export class NeuralBotController {
       outVec[idx++] = clearance;
     }
 
-    // Opponents (top 2, 8 features)
+    // Opponents (top 2, 12 features incl. heading for trap geometry)
     let opp1DistSq = 1200 * 1200;
     let opp1: Snake | null = null;
+    let opp1Heading = 0;
     let opp2DistSq = 1200 * 1200;
     let opp2: Snake | null = null;
+    let opp2Heading = 0;
 
     for (let i = 0; i < allSnakes.length; i++) {
       const s = allSnakes[i];
@@ -262,11 +295,14 @@ export class NeuralBotController {
       if (dSq < opp1DistSq) {
         opp2DistSq = opp1DistSq;
         opp2 = opp1;
+        opp2Heading = opp1Heading;
         opp1DistSq = dSq;
         opp1 = s;
+        opp1Heading = s.angle;
       } else if (dSq < opp2DistSq) {
         opp2DistSq = dSq;
         opp2 = s;
+        opp2Heading = s.angle;
       }
     }
 
@@ -274,14 +310,21 @@ export class NeuralBotController {
       const dist = Math.sqrt(opp1DistSq);
       const absAngle = Math.atan2(opp1.head.y - headY, opp1.head.x - headX);
       const relAngle = absAngle - bot.angle;
+      let hd = opp1Heading - bot.angle;
+      while (hd < -Math.PI) hd += Math.PI * 2;
+      while (hd > Math.PI) hd -= Math.PI * 2;
       outVec[idx++] = Math.min(1.0, dist / 1000);
       outVec[idx++] = Math.cos(relAngle);
       outVec[idx++] = Math.sin(relAngle);
       outVec[idx++] = Math.max(-1.0, Math.min(1.0, (bot.score - opp1.score) / 300));
+      outVec[idx++] = Math.cos(hd);
+      outVec[idx++] = Math.sin(hd);
     } else {
       outVec[idx++] = 1.0;
       outVec[idx++] = 0.0;
       outVec[idx++] = 0.0;
+      outVec[idx++] = 0.0;
+      outVec[idx++] = 1.0;
       outVec[idx++] = 0.0;
     }
 
@@ -289,14 +332,21 @@ export class NeuralBotController {
       const dist = Math.sqrt(opp2DistSq);
       const absAngle = Math.atan2(opp2.head.y - headY, opp2.head.x - headX);
       const relAngle = absAngle - bot.angle;
+      let hd = opp2Heading - bot.angle;
+      while (hd < -Math.PI) hd += Math.PI * 2;
+      while (hd > Math.PI) hd -= Math.PI * 2;
       outVec[idx++] = Math.min(1.0, dist / 1000);
       outVec[idx++] = Math.cos(relAngle);
       outVec[idx++] = Math.sin(relAngle);
       outVec[idx++] = Math.max(-1.0, Math.min(1.0, (bot.score - opp2.score) / 300));
+      outVec[idx++] = Math.cos(hd);
+      outVec[idx++] = Math.sin(hd);
     } else {
       outVec[idx++] = 1.0;
       outVec[idx++] = 0.0;
       outVec[idx++] = 0.0;
+      outVec[idx++] = 0.0;
+      outVec[idx++] = 1.0;
       outVec[idx++] = 0.0;
     }
 
@@ -329,5 +379,33 @@ export class NeuralBotController {
       outVec[idx++] = 1.0;
       outVec[idx++] = 0.0;
     }
+
+    // Own-body loop closure (3 features)
+    let ownDist = 2000;
+    let ownRel = 0;
+    const body = bot.body;
+    if (body && body.length > 5) {
+      let bestSq = Infinity;
+      let bx = 0;
+      let by = 0;
+      for (let i = 4; i < body.length; i += 3) {
+        const seg = body[i];
+        const dx = seg.x - headX;
+        const dy = seg.y - headY;
+        const dSq = dx * dx + dy * dy;
+        if (dSq < bestSq) {
+          bestSq = dSq;
+          bx = seg.x;
+          by = seg.y;
+        }
+      }
+      if (bestSq < Infinity) {
+        ownDist = Math.sqrt(bestSq);
+        ownRel = Math.atan2(by - headY, bx - headX) - bot.angle;
+      }
+    }
+    outVec[idx++] = Math.min(1.0, ownDist / 2000);
+    outVec[idx++] = Math.cos(ownRel);
+    outVec[idx++] = Math.sin(ownRel);
   }
 }

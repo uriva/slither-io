@@ -1,6 +1,6 @@
 import { Snake, Orb } from '../../src/game/types';
 import { SpatialGrid, GridItem } from '../../src/game/spatialGrid';
-import { ARENA_RADIUS, MAX_RADIUS, BOOST_SPEED } from '../../src/game/constants';
+import { ARENA_RADIUS, MAX_RADIUS, BOOST_SPEED, BOOST_TURN_SPEED } from '../../src/game/constants';
 import { Observation, BodySegmentItem } from './types';
 
 const WHISKER_ANGLES = [0, 0.45, -0.45, 0.9, -0.9, 1.4, -1.4, 1.9, -1.9, 2.4, -2.4];
@@ -9,6 +9,12 @@ const ARENA_BARRIER_SQ = ARENA_BARRIER_DIST * ARENA_BARRIER_DIST;
 
 export class ObservationExtractor {
   private static foodQueryBuffer: (Orb & GridItem)[] = [];
+  private static lastAngleById: Map<string, { angle: number; timer: number }> = new Map();
+
+  /** Clear per-snake turn memory. Call at the start of each training episode. */
+  public static resetMemory(): void {
+    ObservationExtractor.lastAngleById.clear();
+  }
 
   /**
    * Extracts structured observation object
@@ -118,6 +124,59 @@ export class ObservationExtractor {
       }
     }
 
+    // 4. Short-term turn memory: fraction of max turn authority used per frame.
+    // Normalized by frames elapsed (via aiTimer) so gate=1 and gate=14 training
+    // see the same scale — a cadence-invariant curvature signal for coils.
+    // Falls back to frames=1 when the caller doesn't tick aiTimer per frame.
+    const last = ObservationExtractor.lastAngleById.get(bot.id);
+    let turnRate = 0;
+    if (last !== undefined) {
+      const curTimer = typeof bot.aiTimer === 'number' ? bot.aiTimer : last.timer + 1;
+      const frames = Math.max(1, curTimer - last.timer);
+      let d = bot.angle - last.angle;
+      while (d < -Math.PI) d += Math.PI * 2;
+      while (d > Math.PI) d -= Math.PI * 2;
+      turnRate = Math.max(-1.0, Math.min(1.0, d / frames / BOOST_TURN_SPEED));
+      ObservationExtractor.lastAngleById.set(bot.id, { angle: bot.angle, timer: curTimer });
+    } else {
+      const curTimer = typeof bot.aiTimer === 'number' ? bot.aiTimer : 0;
+      ObservationExtractor.lastAngleById.set(bot.id, { angle: bot.angle, timer: curTimer });
+    }
+    if (ObservationExtractor.lastAngleById.size > 500) ObservationExtractor.lastAngleById.clear();
+    if (bot.isDead) ObservationExtractor.lastAngleById.delete(bot.id);
+
+    // 5. Nearest own-body segment (loop-closure awareness).
+    // Whiskers exclude own id, so without this the net can never perceive
+    // an encirclement loop forming — a prerequisite for emergent circling.
+    let ownDist = 2000;
+    let ownRelAngle = 0;
+    const body = bot.body;
+    if (body && body.length > 5) {
+      let bestSq = Infinity;
+      let bx = 0;
+      let by = 0;
+      for (let i = 4; i < body.length; i += 3) {
+        const seg = body[i];
+        const dx = seg.x - headX;
+        const dy = seg.y - headY;
+        const dSq = dx * dx + dy * dy;
+        if (dSq < bestSq) {
+          bestSq = dSq;
+          bx = seg.x;
+          by = seg.y;
+        }
+      }
+      if (bestSq < Infinity) {
+        ownDist = Math.sqrt(bestSq);
+        const absA = Math.atan2(by - headY, bx - headX);
+        let rel = absA - bot.angle;
+        while (rel < -Math.PI) rel += Math.PI * 2;
+        while (rel > Math.PI) rel -= Math.PI * 2;
+        ownRelAngle = rel;
+      }
+    }
+    const ownBody = { dist: ownDist, relAngle: ownRelAngle };
+
     return {
       headX,
       headY,
@@ -127,25 +186,28 @@ export class ObservationExtractor {
       radius: bot.radius,
       distToBoundary,
       angleToCenter,
+      turnRate,
       whiskerClearances,
       opponents,
       food,
+      ownBody,
     };
   }
 
   /**
-   * Vectorizes the observation into a normalized 32-float array for direct neural net inference
+   * Vectorizes the observation into a normalized 40-float array for direct neural net inference
    */
   public static toNormalizedVector(obs: Observation): Float32Array {
-    const vec = new Float32Array(32);
+    const vec = new Float32Array(40);
     let idx = 0;
 
-    // Self kinematics (5 features)
+    // Self kinematics (6 features, incl. turn-rate memory)
     vec[idx++] = Math.cos(obs.angle);
     vec[idx++] = Math.sin(obs.angle);
     vec[idx++] = obs.speed / BOOST_SPEED;
     vec[idx++] = Math.min(1.0, obs.score / 1000);
     vec[idx++] = obs.radius / MAX_RADIUS;
+    vec[idx++] = Math.max(-1.0, Math.min(1.0, obs.turnRate));
 
     // Boundary (3 features)
     vec[idx++] = Math.min(1.0, obs.distToBoundary / ARENA_RADIUS);
@@ -157,31 +219,39 @@ export class ObservationExtractor {
       vec[idx++] = obs.whiskerClearances[i] ?? 1.0;
     }
 
-    // Opponent 1 (4 features)
+    // Opponent 1 (6 features, incl. heading for intercept/trap geometry)
     if (obs.opponents.length > 0) {
       const opp = obs.opponents[0];
       vec[idx++] = Math.min(1.0, opp.dist / 1000);
       vec[idx++] = Math.cos(opp.relAngle);
       vec[idx++] = Math.sin(opp.relAngle);
       vec[idx++] = Math.max(-1.0, Math.min(1.0, opp.massDelta / 300));
+      vec[idx++] = Math.cos(opp.headingDiff);
+      vec[idx++] = Math.sin(opp.headingDiff);
     } else {
       vec[idx++] = 1.0;
       vec[idx++] = 0.0;
       vec[idx++] = 0.0;
       vec[idx++] = 0.0;
+      vec[idx++] = 1.0;
+      vec[idx++] = 0.0;
     }
 
-    // Opponent 2 (4 features)
+    // Opponent 2 (6 features)
     if (obs.opponents.length > 1) {
       const opp = obs.opponents[1];
       vec[idx++] = Math.min(1.0, opp.dist / 1000);
       vec[idx++] = Math.cos(opp.relAngle);
       vec[idx++] = Math.sin(opp.relAngle);
       vec[idx++] = Math.max(-1.0, Math.min(1.0, opp.massDelta / 300));
+      vec[idx++] = Math.cos(opp.headingDiff);
+      vec[idx++] = Math.sin(opp.headingDiff);
     } else {
       vec[idx++] = 1.0;
       vec[idx++] = 0.0;
       vec[idx++] = 0.0;
+      vec[idx++] = 0.0;
+      vec[idx++] = 1.0;
       vec[idx++] = 0.0;
     }
 
@@ -206,6 +276,12 @@ export class ObservationExtractor {
       vec[idx++] = 1.0;
       vec[idx++] = 0.0;
     }
+
+    // Own-body loop closure (3 features): nearest own segment dist + bearing.
+    // Lets the net perceive an encirclement loop forming around a victim.
+    vec[idx++] = Math.min(1.0, obs.ownBody.dist / 2000);
+    vec[idx++] = Math.cos(obs.ownBody.relAngle);
+    vec[idx++] = Math.sin(obs.ownBody.relAngle);
 
     return vec;
   }

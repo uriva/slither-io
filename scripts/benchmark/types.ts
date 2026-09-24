@@ -22,6 +22,8 @@ export interface Observation {
   radius: number;
   distToBoundary: number;
   angleToCenter: number;
+  // Short-term memory: wrapped angle delta since last extract, normalized [-1..1]
+  turnRate: number;
 
   // 11 whiskers clearance ratios [0..1]
   whiskerClearances: number[];
@@ -40,6 +42,12 @@ export interface Observation {
     relAngle: number;
     value: number;
   }>;
+
+  // Nearest own-body segment (loop-closure awareness for emergent encirclement)
+  ownBody: {
+    dist: number;
+    relAngle: number;
+  };
 }
 
 export interface AgentPolicy {

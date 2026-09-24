@@ -5,7 +5,7 @@ import { ARENA_RADIUS, INITIAL_SNAKE_LENGTH, SKINS, BOT_NAMES } from '../../src/
 import * as fs from 'fs';
 
 export function collectRawTensors(sampleTarget: number = 80000, outputPath: string = 'scripts/benchmark/raw_dataset.bin') {
-  console.log(`🎮 Collecting ${sampleTarget} raw 32-float observation tensors + continuous action targets...`);
+  console.log(`🎮 Collecting ${sampleTarget} raw 40-float observation tensors + continuous action targets...`);
 
   const engine = new GameEngine();
   engine.autoReplenishBots = false;
@@ -14,8 +14,8 @@ export function collectRawTensors(sampleTarget: number = 80000, outputPath: stri
   const hunter = new AggressiveHunterPolicy();
   const botCount = 40;
 
-  // Float32Array: 32 inputs + 2 outputs (steeringDelta, boost) = 34 floats per sample
-  const data = new Float32Array(sampleTarget * 34);
+  // Float32Array: 40 inputs + 2 outputs (steeringDelta, boost) = 42 floats per sample
+  const data = new Float32Array(sampleTarget * 42);
   let sampleCount = 0;
 
   for (let i = 0; i < botCount; i++) {
@@ -76,14 +76,14 @@ export function collectRawTensors(sampleTarget: number = 80000, outputPath: stri
       while (angleDelta < -Math.PI) angleDelta += Math.PI * 2;
       while (angleDelta > Math.PI) angleDelta -= Math.PI * 2;
 
-      // Copy 32 features
-      const offset = sampleCount * 34;
-      for (let i = 0; i < 32; i++) {
+      // Copy 40 features
+      const offset = sampleCount * 42;
+      for (let i = 0; i < 40; i++) {
         data[offset + i] = vec[i];
       }
       // Copy 2 targets: normalized steering delta [-1..1] and boost [0..1]
-      data[offset + 32] = Math.max(-1.0, Math.min(1.0, angleDelta / Math.PI));
-      data[offset + 33] = chosenBoost ? 1.0 : 0.0;
+      data[offset + 40] = Math.max(-1.0, Math.min(1.0, angleDelta / Math.PI));
+      data[offset + 41] = chosenBoost ? 1.0 : 0.0;
 
       sampleCount++;
     }

@@ -13,7 +13,7 @@ class DiscreteSlitherNet(nn.Module):
     def __init__(self):
         super().__init__()
         self.shared = nn.Sequential(
-            nn.Linear(32, 128),
+            nn.Linear(40, 128),
             nn.ReLU(),
             nn.Linear(128, 64),
             nn.ReLU(),
@@ -30,19 +30,19 @@ def main():
     t0 = time.time()
 
     raw_data = np.fromfile('scripts/benchmark/raw_dataset.bin', dtype=np.float32)
-    num_samples = len(raw_data) // 34
-    data = raw_data.reshape(num_samples, 34)
+    num_samples = len(raw_data) // 42
+    data = raw_data.reshape(num_samples, 42)
 
-    X = torch.tensor(data[:, :32], dtype=torch.float32)
+    X = torch.tensor(data[:, :40], dtype=torch.float32)
     # Target angle delta in [-pi, pi]
-    target_angles = data[:, 32] * np.pi
+    target_angles = data[:, 40] * np.pi
     # Map to 16 discrete bins
     bin_indices = np.digitize(target_angles, BIN_EDGES) - 1
     bin_indices = np.clip(bin_indices, 0, NUM_BINS - 1)
     y_angle = torch.tensor(bin_indices, dtype=torch.long)
 
     # Boost target
-    y_boost = torch.tensor(data[:, 33], dtype=torch.long)
+    y_boost = torch.tensor(data[:, 41], dtype=torch.long)
 
     print(f"Dataset: {X.shape[0]} samples. Angle bins: {NUM_BINS}")
 

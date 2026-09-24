@@ -9,7 +9,7 @@ class RawSlitherNet(nn.Module):
     def __init__(self):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(32, 64),
+            nn.Linear(40, 64),
             nn.ReLU(),
             nn.Linear(64, 32),
             nn.ReLU(),
@@ -23,13 +23,13 @@ def main():
     print("🚀 TRAINING NEURAL POLICY ON RAW SENSORY TENSORS")
     t0 = time.time()
 
-    # Load 80,000 raw samples
+    # Load 80,000 raw samples (40 inputs + 2 targets = 42 floats per sample)
     raw_data = np.fromfile('scripts/benchmark/raw_dataset.bin', dtype=np.float32)
-    num_samples = len(raw_data) // 34
-    data = raw_data.reshape(num_samples, 34)
+    num_samples = len(raw_data) // 42
+    data = raw_data.reshape(num_samples, 42)
 
-    X = torch.tensor(data[:, :32], dtype=torch.float32)
-    y = torch.tensor(data[:, 32:], dtype=torch.float32)
+    X = torch.tensor(data[:, :40], dtype=torch.float32)
+    y = torch.tensor(data[:, 40:], dtype=torch.float32)
 
     print(f"Dataset: {X.shape[0]} transitions, input dim: {X.shape[1]}, output dim: {y.shape[1]}")
 

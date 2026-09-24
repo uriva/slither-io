@@ -14,7 +14,7 @@ export function collectPunisherDataset(sampleTarget: number = 60000, outputPath:
   const punisher = new PatientPunisherPolicy();
   const botCount = 40;
 
-  const data = new Float32Array(sampleTarget * 34);
+  const data = new Float32Array(sampleTarget * 42);
   let sampleCount = 0;
 
   for (let i = 0; i < botCount; i++) {
@@ -75,12 +75,12 @@ export function collectPunisherDataset(sampleTarget: number = 60000, outputPath:
       while (angleDelta < -Math.PI) angleDelta += Math.PI * 2;
       while (angleDelta > Math.PI) angleDelta -= Math.PI * 2;
 
-      const offset = sampleCount * 34;
-      for (let i = 0; i < 32; i++) {
+      const offset = sampleCount * 42;
+      for (let i = 0; i < 40; i++) {
         data[offset + i] = vec[i];
       }
-      data[offset + 32] = Math.max(-1.0, Math.min(1.0, angleDelta / Math.PI));
-      data[offset + 33] = chosenBoost ? 1.0 : 0.0;
+      data[offset + 40] = Math.max(-1.0, Math.min(1.0, angleDelta / Math.PI));
+      data[offset + 41] = chosenBoost ? 1.0 : 0.0;
 
       sampleCount++;
     }

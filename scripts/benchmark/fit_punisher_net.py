@@ -9,7 +9,7 @@ class PunisherNet(nn.Module):
     def __init__(self):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(32, 64),
+            nn.Linear(40, 64),
             nn.ReLU(),
             nn.Linear(64, 32),
             nn.ReLU(),
@@ -20,15 +20,15 @@ class PunisherNet(nn.Module):
         return self.net(x)
 
 def main():
-    print("🚀 TRAINING PUNISHER NEURAL NET (32-64-32-2)")
+    print("🚀 TRAINING PUNISHER NEURAL NET (40-64-32-2)")
     t0 = time.time()
 
     raw_data = np.fromfile('scripts/benchmark/punisher_dataset.bin', dtype=np.float32)
-    num_samples = len(raw_data) // 34
-    data = raw_data.reshape(num_samples, 34)
+    num_samples = len(raw_data) // 42
+    data = raw_data.reshape(num_samples, 42)
 
-    X = torch.tensor(data[:, :32], dtype=torch.float32)
-    y = torch.tensor(data[:, 32:], dtype=torch.float32)
+    X = torch.tensor(data[:, :40], dtype=torch.float32)
+    y = torch.tensor(data[:, 40:], dtype=torch.float32)
 
     n = len(X)
     idx = torch.randperm(n)

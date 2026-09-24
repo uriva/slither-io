@@ -13,6 +13,22 @@ const WHISKER_ANGLES = [0, 0.45, -0.45, 0.9, -0.9, 1.4, -1.4, 1.9, -1.9, 2.4, -2
 const ARENA_BARRIER_DIST = ARENA_RADIUS - 60;
 const ARENA_BARRIER_SQ = ARENA_BARRIER_DIST * ARENA_BARRIER_DIST;
 
+/** Input width of the 40-float encirclement-aware observation vector. */
+export const OBS_DIM = 40;
+
+/**
+ * Backward compat: pre-encirclement weights are 32-wide; zero-pad the
+ * 8 new perception dims so old nets run unchanged until retrained.
+ */
+function padW1(w1: number[][], target: number = OBS_DIM): number[][] {
+  if (w1.length === 0 || w1[0].length >= target) return w1;
+  return w1.map((row) => {
+    const padded = row.slice();
+    while (padded.length < target) padded.push(0);
+    return padded;
+  });
+}
+
 /**
  * 1. Current Deterministic Baseline Policy (BotAIController)
  */
@@ -194,15 +210,15 @@ export class AggressiveHunterPolicy implements AgentPolicy {
 
 /**
  * 3. Fast Neural Decision Policy (2-layer MLP in pure JS/TS)
- * Takes normalized 32-float observation vector and computes continuous steering delta & boost logit.
+ * Takes normalized 40-float observation vector and computes continuous steering delta & boost logit.
  * Operates in ~0.005ms (5 microseconds) per bot.
  */
 export class FastNeuralPolicy implements AgentPolicy {
   public id = 'neural-mlp';
-  public name = 'Neural Decision Policy (32-24-2 MLP)';
-  public description = 'Multi-layer perceptron taking 32 normalized spatial/whisker features, computing steering & boost';
+  public name = 'Neural Decision Policy (40-24-2 MLP)';
+  public description = 'Multi-layer perceptron taking 40 normalized spatial/whisker features, computing steering & boost';
 
-  // Fixed calibrated neural network weights (32 -> 24 -> 2)
+  // Fixed calibrated neural network weights (40 -> 24 -> 2)
   private static W1: Float32Array;
   private static B1: Float32Array;
   private static W2: Float32Array;
@@ -210,7 +226,7 @@ export class FastNeuralPolicy implements AgentPolicy {
 
   static {
     // Calibrate weights with inductive bias towards whisker clearance and target pursuit
-    const inDim = 32;
+    const inDim = 40;
     const hDim = 24;
     FastNeuralPolicy.W1 = new Float32Array(inDim * hDim);
     FastNeuralPolicy.B1 = new Float32Array(hDim);
@@ -221,19 +237,31 @@ export class FastNeuralPolicy implements AgentPolicy {
     for (let h = 0; h < hDim; h++) {
       for (let i = 0; i < inDim; i++) {
         let w = 0.0;
-        // Whiskers (features 8..18)
-        if (i >= 8 && i <= 18) {
-          const whiskerIdx = i - 8;
+        // Turn-rate memory (feature 5): sustain curvature for coils
+        if (i === 5) {
+          w = 0.7;
+        }
+        // Whiskers (features 9..19)
+        if (i >= 9 && i <= 19) {
+          const whiskerIdx = i - 9;
           const turnBias = whiskerIdx < 5 ? 0.8 : -0.8;
           w = (h % 2 === 0 ? turnBias : 0.5);
         }
-        // Opponent relative angle (feature 20, 21)
-        if (i === 20 || i === 21) {
+        // Opponent relative angle (features 21, 22, 27, 28)
+        if (i === 21 || i === 22 || i === 27 || i === 28) {
           w = 0.9;
         }
-        // Food relative angle (feature 28)
-        if (i === 28) {
+        // Opponent heading (features 24, 25, 30, 31)
+        if (i === 24 || i === 25 || i === 30 || i === 31) {
+          w = 0.7;
+        }
+        // Food relative angle (features 33, 34)
+        if (i === 33 || i === 34) {
           w = 0.6;
+        }
+        // Own-body loop closure (features 37..39)
+        if (i >= 37 && i <= 39) {
+          w = 0.5;
         }
         FastNeuralPolicy.W1[h * inDim + i] = w + Math.sin(h * 31 + i) * 0.1;
       }
@@ -261,7 +289,7 @@ export class FastNeuralPolicy implements AgentPolicy {
     const vec = ObservationExtractor.toNormalizedVector(obs);
 
     // 2. Forward pass: Hidden layer with ReLU
-    const inDim = 32;
+    const inDim = 40;
     const hDim = 24;
     const hidden = new Float32Array(hDim);
 
@@ -420,7 +448,7 @@ export class HierarchicalLatencyPolicy implements AgentPolicy {
 
 /**
  * 15. Trained Punisher Neural Policy
- * 3-layer MLP (32-64-32-2) trained directly on 60,000 transitions of the 85% Win-Rate Punisher Policy.
+ * 3-layer MLP (40-64-32-2) trained directly on 60,000 transitions of the 85% Win-Rate Punisher Policy.
  * Combines neural tactical counter-trapping with generous 4.5x reflex safety.
  */
 export class TrainedPunisherNeuralPolicy implements AgentPolicy {
@@ -444,7 +472,7 @@ export class TrainedPunisherNeuralPolicy implements AgentPolicy {
       const jsonPath = path.join(__dirname, 'punisher_net.json');
       if (fs.existsSync(jsonPath)) {
         const data = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
-        this.w1 = data.w1;
+        this.w1 = padW1(data.w1);
         this.b1 = data.b1;
         this.w2 = data.w2;
         this.b2 = data.b2;
@@ -477,12 +505,12 @@ export class TrainedPunisherNeuralPolicy implements AgentPolicy {
     const obs = ObservationExtractor.extract(bot, allSnakes, bodyGrid, foodGrid);
     const x = ObservationExtractor.toNormalizedVector(obs);
 
-    // Layer 1: 32 -> 64
+    // Layer 1: 40 -> 64
     const h1 = new Float32Array(64);
     for (let i = 0; i < 64; i++) {
       let sum = TrainedPunisherNeuralPolicy.b1[i];
       const wRow = TrainedPunisherNeuralPolicy.w1[i];
-      for (let j = 0; j < 32; j++) {
+      for (let j = 0; j < OBS_DIM; j++) {
         sum += x[j] * wRow[j];
       }
       h1[i] = sum > 0 ? sum : 0;
@@ -905,7 +933,7 @@ export class DiscreteNeuralPolicy implements AgentPolicy {
       if (fs.existsSync(jsonPath)) {
         const data = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
         this.binCenters = data.bin_centers;
-        this.w1 = data.w1;
+        this.w1 = padW1(data.w1);
         this.b1 = data.b1;
         this.w2 = data.w2;
         this.b2 = data.b2;
@@ -940,12 +968,12 @@ export class DiscreteNeuralPolicy implements AgentPolicy {
     const obs = ObservationExtractor.extract(bot, allSnakes, bodyGrid, foodGrid);
     const x = ObservationExtractor.toNormalizedVector(obs);
 
-    // Layer 1: 32 -> 128 (ReLU)
+    // Layer 1: 40 -> 128 (ReLU)
     const h1 = new Float32Array(128);
     for (let i = 0; i < 128; i++) {
       let sum = DiscreteNeuralPolicy.b1[i];
       const wRow = DiscreteNeuralPolicy.w1[i];
-      for (let j = 0; j < 32; j++) {
+      for (let j = 0; j < OBS_DIM; j++) {
         sum += x[j] * wRow[j];
       }
       h1[i] = sum > 0 ? sum : 0;
@@ -1153,7 +1181,7 @@ export class ChampionNeuralPolicy implements AgentPolicy {
       const jsonPath = path.join(__dirname, 'champion_net.json');
       if (fs.existsSync(jsonPath)) {
         const data = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
-        this.w1 = data.w1;
+        this.w1 = padW1(data.w1);
         this.b1 = data.b1;
         this.w2 = data.w2;
         this.b2 = data.b2;
@@ -1186,12 +1214,12 @@ export class ChampionNeuralPolicy implements AgentPolicy {
     const obs = ObservationExtractor.extract(bot, allSnakes, bodyGrid, foodGrid);
     const x = ObservationExtractor.toNormalizedVector(obs);
 
-    // Layer 1: 32 -> 64 (ReLU)
+    // Layer 1: 40 -> 64 (ReLU)
     const h1 = new Float32Array(64);
     for (let i = 0; i < 64; i++) {
       let sum = ChampionNeuralPolicy.b1[i];
       const wRow = ChampionNeuralPolicy.w1[i];
-      for (let j = 0; j < 32; j++) {
+      for (let j = 0; j < OBS_DIM; j++) {
         sum += x[j] * wRow[j];
       }
       h1[i] = sum > 0 ? sum : 0;
@@ -1269,7 +1297,7 @@ export class ChampionNeuralPolicy implements AgentPolicy {
 
 /**
  * 9. Shielded Trained Neural Policy
- * Runs the trained neural network (32-64-32-2 MLP) for all tactical decisions,
+ * Runs the trained neural network (40-64-32-2 MLP) for all tactical decisions,
  * but uses a 1-microsecond reflex shield to prevent grazing collisions.
  */
 export class ShieldedNeuralPolicy implements AgentPolicy {
@@ -1361,12 +1389,12 @@ export class ShieldedNeuralPolicy implements AgentPolicy {
 
 /**
  * 8. Trained Raw Tensor Neural Policy
- * 3-layer MLP (32 -> 64 -> 32 -> 2) trained directly on 80,000 raw state transitions via behavioral cloning.
+ * 3-layer MLP (40 -> 64 -> 32 -> 2) trained directly on 80,000 raw state transitions via behavioral cloning.
  * Operates in ~0.003ms (3 microseconds) on raw continuous floating-point vectors without text tokenization.
  */
 export class TrainedRawTensorPolicy implements AgentPolicy {
   public id = 'trained-raw-net';
-  public name = 'Trained Raw Neural Network (32-64-32-2 MLP)';
+  public name = 'Trained Raw Neural Network (40-64-32-2 MLP)';
   public description = 'Trained on 80,000 raw floating-point state transitions, predicting continuous steering and boost';
 
   private static w1: number[][];
@@ -1385,7 +1413,7 @@ export class TrainedRawTensorPolicy implements AgentPolicy {
       const jsonPath = path.join(__dirname, 'trained_raw_net.json');
       if (fs.existsSync(jsonPath)) {
         const data = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
-        this.w1 = data.w1;
+        this.w1 = padW1(data.w1);
         this.b1 = data.b1;
         this.w2 = data.w2;
         this.b2 = data.b2;
@@ -1415,16 +1443,16 @@ export class TrainedRawTensorPolicy implements AgentPolicy {
       if (!TrainedRawTensorPolicy.isLoaded) return;
     }
 
-    // 1. Extract raw 32-float feature vector
+    // 1. Extract raw 40-float feature vector
     const obs = ObservationExtractor.extract(bot, allSnakes, bodyGrid, foodGrid);
     const x = ObservationExtractor.toNormalizedVector(obs);
 
-    // 2. Layer 1: 32 -> 64 (ReLU)
+    // 2. Layer 1: 40 -> 64 (ReLU)
     const h1 = new Float32Array(64);
     for (let i = 0; i < 64; i++) {
       let sum = TrainedRawTensorPolicy.b1[i];
       const wRow = TrainedRawTensorPolicy.w1[i];
-      for (let j = 0; j < 32; j++) {
+      for (let j = 0; j < OBS_DIM; j++) {
         sum += x[j] * wRow[j];
       }
       h1[i] = sum > 0 ? sum : 0;

@@ -7,12 +7,27 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 interface NetWeights {
-  w1: number[][]; // 64 x 32
+  w1: number[][]; // 64 x 40
   b1: number[];   // 64
   w2: number[][]; // 32 x 64
   b2: number[];   // 32
   w3: number[][]; // 2 x 32
   b3: number[];   // 2
+}
+
+export const OBS_DIM = 40;
+
+function padWeights(w: NetWeights): NetWeights {
+  // Backward compat: pre-encirclement weights are 64x32; zero-pad the
+  // 8 new perception dims so old champions keep running until retrained.
+  if (w.w1.length > 0 && w.w1[0].length < OBS_DIM) {
+    const padded = cloneWeights(w);
+    for (let i = 0; i < padded.w1.length; i++) {
+      while (padded.w1[i].length < OBS_DIM) padded.w1[i].push(0);
+    }
+    return padded;
+  }
+  return w;
 }
 
 function cloneWeights(w: NetWeights): NetWeights {
@@ -23,7 +38,7 @@ function mutateWeights(w: NetWeights, sigma: number): NetWeights {
   const mutated = cloneWeights(w);
   for (let i = 0; i < 64; i++) {
     mutated.b1[i] += (Math.random() - 0.5) * 2 * sigma;
-    for (let j = 0; j < 32; j++) {
+    for (let j = 0; j < OBS_DIM; j++) {
       mutated.w1[i][j] += (Math.random() - 0.5) * 2 * sigma;
     }
   }
@@ -43,12 +58,12 @@ function mutateWeights(w: NetWeights, sigma: number): NetWeights {
 }
 
 function forwardPass(x: Float32Array, w: NetWeights): { steerDelta: number; shouldBoost: boolean } {
-  // Layer 1: 32 -> 64
+  // Layer 1: 40 -> 64
   const h1 = new Float32Array(64);
   for (let i = 0; i < 64; i++) {
     let sum = w.b1[i];
     const wRow = w.w1[i];
-    for (let j = 0; j < 32; j++) {
+    for (let j = 0; j < OBS_DIM; j++) {
       sum += x[j] * wRow[j];
     }
     h1[i] = sum > 0 ? sum : 0;
@@ -89,6 +104,7 @@ const ARENA_DANGER_DIST = ARENA_RADIUS - 400;
 const ARENA_DANGER_SQ = ARENA_DANGER_DIST * ARENA_DANGER_DIST;
 
 function evaluateCandidate(weights: NetWeights, ticks: number = 800): { fitness: number; kills: number; deaths: number; peakScore: number; growthRate: number; ticksAlive: number } {
+  ObservationExtractor.resetMemory();
   const engine = new GameEngine();
   engine.autoReplenishBots = false;
   engine.snakes = [];
@@ -143,6 +159,7 @@ function evaluateCandidate(weights: NetWeights, ticks: number = 800): { fitness:
   // Custom update
   engine.customBotUpdate = (bot, allSnakes, bodyGrid, foodGrid) => {
     if (bot.id === 'candidate') {
+      bot.aiTimer = (bot.aiTimer || 0) + 1; // ticked per frame for turnRate bookkeeping
       const obs = ObservationExtractor.extract(bot, allSnakes, bodyGrid, foodGrid);
       const vec = ObservationExtractor.toNormalizedVector(obs);
       const action = forwardPass(vec, weights);
@@ -258,9 +275,11 @@ export function runEvolution() {
     return;
   }
 
-  const baseWeights: NetWeights = JSON.parse(fs.readFileSync(baseWeightsPath, 'utf8'));
-  const populationSize = 20;
-  const generations = 15;
+  const baseWeights: NetWeights = padWeights(JSON.parse(fs.readFileSync(baseWeightsPath, 'utf8')));
+  // Generous search budget: eating discovery from a starving seed is rare —
+  // small populations lottery on it. ~600 evals still runs in about a minute.
+  const populationSize = 30;
+  const generations = 20;
 
   let population: NetWeights[] = [];
   // Seed with cloned base weights and small mutations

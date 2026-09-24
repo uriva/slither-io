@@ -7,12 +7,25 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 export interface NetWeights {
-  w1: number[][]; // 64 x 32
+  w1: number[][]; // 64 x 40
   b1: number[];   // 64
   w2: number[][]; // 32 x 64
   b2: number[];   // 32
   w3: number[][]; // 2 x 32
   b3: number[];   // 2
+}
+
+export const OBS_DIM = 40;
+
+function padWeights(w: NetWeights): NetWeights {
+  if (w.w1.length > 0 && w.w1[0].length < OBS_DIM) {
+    const padded = cloneWeights(w);
+    for (let i = 0; i < padded.w1.length; i++) {
+      while (padded.w1[i].length < OBS_DIM) padded.w1[i].push(0);
+    }
+    return padded;
+  }
+  return w;
 }
 
 export type ArchetypeId =
@@ -59,7 +72,7 @@ function mutateWeights(w: NetWeights, sigma: number): NetWeights {
   const mutated = cloneWeights(w);
   for (let i = 0; i < 64; i++) {
     mutated.b1[i] += (Math.random() - 0.5) * 2 * sigma;
-    for (let j = 0; j < 32; j++) {
+    for (let j = 0; j < OBS_DIM; j++) {
       mutated.w1[i][j] += (Math.random() - 0.5) * 2 * sigma;
     }
   }
@@ -79,12 +92,12 @@ function mutateWeights(w: NetWeights, sigma: number): NetWeights {
 }
 
 function forwardPass(x: Float32Array, w: NetWeights): { steerDelta: number; boostLogit: number } {
-  // Layer 1: 32 -> 64
+  // Layer 1: 40 -> 64
   const h1 = new Float32Array(64);
   for (let i = 0; i < 64; i++) {
     let sum = w.b1[i];
     const wRow = w.w1[i];
-    for (let j = 0; j < 32; j++) {
+    for (let j = 0; j < OBS_DIM; j++) {
       sum += x[j] * wRow[j];
     }
     h1[i] = sum > 0 ? sum : 0;
@@ -223,6 +236,7 @@ function evaluateCandidateNiche(
   archetype: ArchetypeConfig,
   ticks: number = 700
 ): CandidateStats {
+  ObservationExtractor.resetMemory();
   const engine = new GameEngine();
   engine.autoReplenishBots = false;
   engine.snakes = [];
@@ -410,11 +424,22 @@ export async function trainLeagueTop10() {
   console.log('='.repeat(78));
   console.log('Training 10 distinct neural network specialist models across behavioral niches...\n');
 
+  const championPath = path.join(__dirname, 'champion_net.json');
   const punisherPath = path.join(__dirname, 'punisher_net.json');
   const baseWeightsPath = path.join(__dirname, 'trained_raw_net.json');
-  const seedPath = fs.existsSync(punisherPath) ? punisherPath : baseWeightsPath;
+  // Seed from the strongest available eater: champion (evolved) > punisher > raw.
+  // SEED_PATH overrides (e.g. seed lineage experiments from a proven specialist).
+  const envSeed = process.env.SEED_PATH ? path.resolve(process.env.SEED_PATH) : null;
+  const seedPath = envSeed && fs.existsSync(envSeed)
+    ? envSeed
+    : fs.existsSync(championPath)
+      ? championPath
+      : fs.existsSync(punisherPath)
+        ? punisherPath
+        : baseWeightsPath;
+  console.log(`Seeding league from: ${seedPath}`);
 
-  const baseWeights: NetWeights = JSON.parse(fs.readFileSync(seedPath, 'utf8'));
+  const baseWeights: NetWeights = padWeights(JSON.parse(fs.readFileSync(seedPath, 'utf8')));
   const trainedSpecialists: Record<string, { config: ArchetypeConfig; weights: NetWeights; stats: CandidateStats }> = {};
 
   const tStart = performance.now();
@@ -424,8 +449,8 @@ export async function trainLeagueTop10() {
     console.log(`[${aIdx + 1}/10] 🧬 Evolving Niche: ${archetype.name.toUpperCase()}`);
     console.log(`     Target: ${archetype.description}`);
 
-    const popSize = 12;
-    const gens = 8;
+    const popSize = 16;
+    const gens = 12;
     let pop: NetWeights[] = [cloneWeights(baseWeights)];
     for (let i = 1; i < popSize; i++) {
       pop.push(mutateWeights(baseWeights, 0.05));
@@ -450,7 +475,9 @@ export async function trainLeagueTop10() {
     for (let gen = 1; gen <= gens; gen++) {
       const sigma = Math.max(0.015, 0.05 * (1 - gen / gens));
       const evaluated = pop.map((w) => {
-        const stats = evaluateCandidateNiche(w, archetype, 600);
+        // 1200-tick episodes: encirclement takes longer to pay off than a lunge,
+        // short episodes can't surface multi-stage trap behaviors.
+        const stats = evaluateCandidateNiche(w, archetype, 1200);
         const fitness = archetype.evaluateFitness(stats);
         return { w, stats, fitness };
       });
