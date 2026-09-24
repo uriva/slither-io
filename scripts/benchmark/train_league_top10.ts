@@ -43,7 +43,9 @@ export interface CandidateStats {
   wallDeaths: number;
   peakScore: number;
   endScore: number;
+  initialScore: number;
   ticksAlive: number;
+  growthRate: number; // (peakScore - initialScore) / ticksAlive — rewards fast mass gain, not just total mass
   preyEaten: number;
   perimeterTicks: number;
   flankKills: number;
@@ -131,7 +133,7 @@ export const ARCHETYPES: ArchetypeConfig[] = [
     targetSkinIndex: 4,
     safetyMarginMultiplier: 1.25,
     boostAggression: 0.5,
-    evaluateFitness: (s) => s.kills * 1200 + s.ticksAlive * 0.8 + s.peakScore * 1.0 - s.deaths * 1000,
+    evaluateFitness: (s) => s.kills * 1200 + s.ticksAlive * 0.8 + s.peakScore * 1.0 + s.growthRate * 1200 - s.deaths * 1000,
   },
   {
     id: 'interceptor',
@@ -140,7 +142,7 @@ export const ARCHETYPES: ArchetypeConfig[] = [
     targetSkinIndex: 1,
     safetyMarginMultiplier: 1.0,
     boostAggression: 0.8,
-    evaluateFitness: (s) => s.kills * 1500 + s.peakScore * 1.5 - s.deaths * 500,
+    evaluateFitness: (s) => s.kills * 1500 + s.peakScore * 1.5 + s.growthRate * 2000 - s.deaths * 500,
   },
   {
     id: 'vacuum',
@@ -149,7 +151,7 @@ export const ARCHETYPES: ArchetypeConfig[] = [
     targetSkinIndex: 6,
     safetyMarginMultiplier: 1.1,
     boostAggression: 0.6,
-    evaluateFitness: (s) => s.peakScore * 3.5 + s.kills * 600 - s.deaths * 600,
+    evaluateFitness: (s) => s.peakScore * 3.5 + s.growthRate * 2200 + s.kills * 600 - s.deaths * 600,
   },
   {
     id: 'wall_hugger',
@@ -158,7 +160,7 @@ export const ARCHETYPES: ArchetypeConfig[] = [
     targetSkinIndex: 0,
     safetyMarginMultiplier: 1.3,
     boostAggression: 0.3,
-    evaluateFitness: (s) => s.perimeterTicks * 3.0 + s.peakScore * 1.2 + s.kills * 600 - s.wallDeaths * 2500 - s.deaths * 400,
+    evaluateFitness: (s) => s.perimeterTicks * 3.0 + s.peakScore * 1.2 + s.growthRate * 800 + s.kills * 600 - s.wallDeaths * 2500 - s.deaths * 400,
   },
   {
     id: 'baiter',
@@ -167,7 +169,7 @@ export const ARCHETYPES: ArchetypeConfig[] = [
     targetSkinIndex: 3,
     safetyMarginMultiplier: 1.05,
     boostAggression: 0.7,
-    evaluateFitness: (s) => s.kills * 1400 + s.peakScore * 1.2 - s.deaths * 700,
+    evaluateFitness: (s) => s.kills * 1400 + s.peakScore * 1.2 + s.growthRate * 1600 - s.deaths * 700,
   },
   {
     id: 'coiler',
@@ -176,7 +178,7 @@ export const ARCHETYPES: ArchetypeConfig[] = [
     targetSkinIndex: 2,
     safetyMarginMultiplier: 1.15,
     boostAggression: 0.65,
-    evaluateFitness: (s) => s.kills * 1300 + s.peakScore * 1.8 - s.deaths * 600,
+    evaluateFitness: (s) => s.kills * 1300 + s.peakScore * 1.8 + s.growthRate * 1600 - s.deaths * 600,
   },
   {
     id: 'conservative_giant',
@@ -185,7 +187,7 @@ export const ARCHETYPES: ArchetypeConfig[] = [
     targetSkinIndex: 5,
     safetyMarginMultiplier: 1.35,
     boostAggression: 0.25,
-    evaluateFitness: (s) => s.ticksAlive * 3.0 + s.endScore * 2.5 - s.deaths * 1800,
+    evaluateFitness: (s) => s.ticksAlive * 3.0 + s.endScore * 2.5 + s.growthRate * 600 - s.deaths * 1800,
   },
   {
     id: 'flanker',
@@ -194,7 +196,7 @@ export const ARCHETYPES: ArchetypeConfig[] = [
     targetSkinIndex: 7,
     safetyMarginMultiplier: 1.05,
     boostAggression: 0.75,
-    evaluateFitness: (s) => s.flankKills * 1800 + s.kills * 800 + s.peakScore * 1.0 - s.deaths * 500,
+    evaluateFitness: (s) => s.flankKills * 1800 + s.kills * 800 + s.peakScore * 1.0 + s.growthRate * 1600 - s.deaths * 500,
   },
   {
     id: 'prey_stalker',
@@ -203,7 +205,7 @@ export const ARCHETYPES: ArchetypeConfig[] = [
     targetSkinIndex: 4,
     safetyMarginMultiplier: 1.1,
     boostAggression: 0.7,
-    evaluateFitness: (s) => s.preyEaten * 1200 + s.peakScore * 1.5 + s.kills * 500 - s.deaths * 400,
+    evaluateFitness: (s) => s.preyEaten * 1200 + s.peakScore * 1.5 + s.growthRate * 2000 + s.kills * 500 - s.deaths * 400,
   },
   {
     id: 'opportunist',
@@ -212,7 +214,7 @@ export const ARCHETYPES: ArchetypeConfig[] = [
     targetSkinIndex: 0,
     safetyMarginMultiplier: 1.2,
     boostAggression: 0.4,
-    evaluateFitness: (s) => s.peakScore * 2.5 + s.ticksAlive * 1.2 + s.kills * 700 - s.deaths * 500,
+    evaluateFitness: (s) => s.peakScore * 2.5 + s.ticksAlive * 1.2 + s.growthRate * 1400 + s.kills * 700 - s.deaths * 500,
   },
 ];
 
@@ -231,7 +233,9 @@ function evaluateCandidateNiche(
     wallDeaths: 0,
     peakScore: 0,
     endScore: 0,
+    initialScore: 0,
     ticksAlive: 0,
+    growthRate: 0,
     preyEaten: 0,
     perimeterTicks: 0,
     flankKills: 0,
@@ -285,7 +289,9 @@ function evaluateCandidateNiche(
   candidate.policyId = 'candidate';
   engine.snakes.push(candidate);
 
+  stats.initialScore = candidate.score;
   stats.peakScore = candidate.score;
+  stats.endScore = candidate.score;
 
   let cachedAction = { steerDelta: 0, boostLogit: 0 };
 
@@ -390,6 +396,11 @@ function evaluateCandidateNiche(
     if (candidate.isDead) break;
   }
 
+  // Growth speed: mass gained per tick alive. Rewards aggressive fast growers
+  // over passive farmers that reach the same peak mass slowly.
+  const massGained = Math.max(0, stats.peakScore - stats.initialScore);
+  stats.growthRate = massGained / Math.max(1, stats.ticksAlive);
+
   return stats;
 }
 
@@ -428,7 +439,9 @@ export async function trainLeagueTop10() {
       wallDeaths: 0,
       peakScore: 0,
       endScore: 0,
+      initialScore: 0,
       ticksAlive: 0,
+      growthRate: 0,
       preyEaten: 0,
       perimeterTicks: 0,
       flankKills: 0,
@@ -465,7 +478,7 @@ export async function trainLeagueTop10() {
       stats: bestStats,
     };
 
-    console.log(`     ✅ Best Fitness: ${Math.round(bestFitness)} | Kills: ${bestStats.kills} | Peak Mass: ${Math.round(bestStats.peakScore)} | Alive: ${bestStats.deaths === 0 ? 'YES' : 'NO'}\n`);
+    console.log(`     ✅ Best Fitness: ${Math.round(bestFitness)} | Kills: ${bestStats.kills} | Peak Mass: ${Math.round(bestStats.peakScore)} | Growth: ${bestStats.growthRate.toFixed(3)}/tick | Alive: ${bestStats.deaths === 0 ? 'YES' : 'NO'}\n`);
   }
 
   const elapsed = (performance.now() - tStart) / 1000;

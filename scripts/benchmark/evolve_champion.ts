@@ -88,7 +88,7 @@ const ARENA_BARRIER_SQ = ARENA_BARRIER_DIST * ARENA_BARRIER_DIST;
 const ARENA_DANGER_DIST = ARENA_RADIUS - 400;
 const ARENA_DANGER_SQ = ARENA_DANGER_DIST * ARENA_DANGER_DIST;
 
-function evaluateCandidate(weights: NetWeights, ticks: number = 800): { fitness: number; kills: number; deaths: number; peakScore: number } {
+function evaluateCandidate(weights: NetWeights, ticks: number = 800): { fitness: number; kills: number; deaths: number; peakScore: number; growthRate: number; ticksAlive: number } {
   const engine = new GameEngine();
   engine.autoReplenishBots = false;
   engine.snakes = [];
@@ -136,7 +136,9 @@ function evaluateCandidate(weights: NetWeights, ticks: number = 800): { fitness:
   candidate.policyId = 'candidate';
   engine.snakes.push(candidate);
 
+  const initialScore = candidate.score;
   let peakScore = candidate.score;
+  let ticksAlive = 0;
 
   // Custom update
   engine.customBotUpdate = (bot, allSnakes, bodyGrid, foodGrid) => {
@@ -197,7 +199,10 @@ function evaluateCandidate(weights: NetWeights, ticks: number = 800): { fitness:
 
   for (let t = 0; t < ticks; t++) {
     engine.update(16.67);
-    if (candidate.score > peakScore) peakScore = candidate.score;
+    if (!candidate.isDead) {
+      ticksAlive++;
+      if (candidate.score > peakScore) peakScore = candidate.score;
+    }
 
     // Purge dead snakes and maintain baseline count
     for (let i = engine.snakes.length - 1; i >= 0; i--) {
@@ -225,11 +230,22 @@ function evaluateCandidate(weights: NetWeights, ticks: number = 800): { fitness:
     if (candidate.isDead) break;
   }
 
-  // Fitness formula: rewards kills against baseline, mass accumulation, survival
+  // Fitness formula: rewards kills, total mass, AND how fast mass was gained.
+  // Passive farmers that slowly vacuum the same peak mass score lower than
+  // aggressive snakes that spike mass quickly via kills / death drops / prey.
   const survivalBonus = candidate.isDead ? 0 : 250;
-  const fitness = candidateKills * 800 + peakScore * 1.8 + survivalBonus - candidateDeaths * 600;
+  const massGained = Math.max(0, peakScore - initialScore);
+  const growthRate = massGained / Math.max(1, ticksAlive); // mass per tick
+  const killRate = candidateKills / Math.max(1, ticksAlive); // kills per tick
+  const fitness =
+    candidateKills * 800 +
+    killRate * 12000 +
+    peakScore * 1.8 +
+    growthRate * 1500 +
+    survivalBonus -
+    candidateDeaths * 600;
 
-  return { fitness, kills: candidateKills, deaths: candidateDeaths, peakScore };
+  return { fitness, kills: candidateKills, deaths: candidateDeaths, peakScore, growthRate, ticksAlive };
 }
 
 export function runEvolution() {
@@ -260,7 +276,7 @@ export function runEvolution() {
 
   for (let gen = 1; gen <= generations; gen++) {
     const sigma = Math.max(0.015, 0.05 * (1 - gen / generations));
-    const results: Array<{ weights: NetWeights; fitness: number; kills: number; deaths: number; peakScore: number }> = [];
+    const results: Array<{ weights: NetWeights; fitness: number; kills: number; deaths: number; peakScore: number; growthRate: number; ticksAlive: number }> = [];
 
     for (let i = 0; i < populationSize; i++) {
       const evalRes = evaluateCandidate(population[i], 650);
@@ -275,7 +291,7 @@ export function runEvolution() {
       bestEver = cloneWeights(genBest.weights);
     }
 
-    console.log(`  Gen ${gen.toString().padStart(2)}/${generations} | Best Fitness: ${Math.round(genBest.fitness).toString().padStart(5)} | Kills: ${genBest.kills} | Peak Mass: ${Math.round(genBest.peakScore).toString().padStart(4)} | Alive: ${genBest.deaths === 0 ? 'YES' : 'NO '}`);
+    console.log(`  Gen ${gen.toString().padStart(2)}/${generations} | Best Fitness: ${Math.round(genBest.fitness).toString().padStart(5)} | Kills: ${genBest.kills} | Peak Mass: ${Math.round(genBest.peakScore).toString().padStart(4)} | Growth: ${genBest.growthRate.toFixed(3)}/tick | Alive: ${genBest.deaths === 0 ? 'YES' : 'NO '}`);
 
     // Elitism: Top 4 survive, breed next generation with mutation
     const elites = results.slice(0, 4);
