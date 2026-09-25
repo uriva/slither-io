@@ -58,6 +58,7 @@ export interface Snake {
   policyId?: string;
   aiArchetype?: string;
   isSyncedBot?: boolean;
+  twirlFactor?: number;
   trailX?: Float32Array;
   trailY?: Float32Array;
   trailHeadIdx?: number;
@@ -110,6 +111,8 @@ export interface Orb {
   preyAngle?: number;
   preySpeed?: number;
   pulsePhase: number;
+  wanderAngle?: number;
+  baseSpeed?: number;
 }
 
 export interface Particle {

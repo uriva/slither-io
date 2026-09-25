@@ -178,24 +178,35 @@ export class GameEngine {
       if (!ctx) continue;
 
       // Outer soft glow gradient
-      const glowGrad = ctx.createRadialGradient(center, center, radius * 0.2, center, center, radius * 1.4);
+      const glowGrad = ctx.createRadialGradient(center, center, radius * 0.2, center, center, radius * 1.45);
       glowGrad.addColorStop(0, colorCfg.glow);
       glowGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
       ctx.fillStyle = glowGrad;
       ctx.beginPath();
-      ctx.arc(center, center, radius * 1.4, 0, Math.PI * 2);
+      ctx.arc(center, center, radius * 1.45, 0, Math.PI * 2);
       ctx.fill();
 
-      // Solid core
+      // Solid core with outer dark cellular membrane rim
       ctx.beginPath();
       ctx.arc(center, center, radius, 0, Math.PI * 2);
       ctx.fillStyle = colorCfg.color;
       ctx.fill();
 
-      // Specular highlight
+      // Distinct dark rim stroke for depth
+      ctx.lineWidth = 1.8;
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.35)';
+      ctx.stroke();
+
+      // Inner luminous center
       ctx.beginPath();
-      ctx.arc(center - radius * 0.3, center - radius * 0.3, radius * 0.35, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+      ctx.arc(center - radius * 0.15, center - radius * 0.15, radius * 0.55, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+      ctx.fill();
+
+      // Sharp specular highlight
+      ctx.beginPath();
+      ctx.arc(center - radius * 0.32, center - radius * 0.32, radius * 0.30, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
       ctx.fill();
 
       this.orbSprites.push(canvas);
@@ -261,9 +272,18 @@ export class GameEngine {
         ctx.fillStyle = color;
         ctx.fill();
 
+        ctx.lineWidth = 1.8;
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.35)';
+        ctx.stroke();
+
         ctx.beginPath();
-        ctx.arc(center - radius * 0.3, center - radius * 0.3, radius * 0.35, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.88)';
+        ctx.arc(center - radius * 0.15, center - radius * 0.15, radius * 0.55, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.arc(center - radius * 0.32, center - radius * 0.32, radius * 0.30, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
         ctx.fill();
       }
       this.customSpriteCache.set(key, sprite);
@@ -316,8 +336,8 @@ export class GameEngine {
 
   public getSnakeTurnSpeed(snake: Snake): number {
     const baseTurn = snake.isBoosting ? BOOST_TURN_SPEED : TURN_SPEED;
-    // In Slither.io, larger snakes have a wider, more majestic turn radius
-    const sizeFactor = Math.max(0.55, 1.0 / (1.0 + (snake.radius - BASE_RADIUS) * 0.022));
+    // In Slither.io, larger snakes have a wider, more majestic turn radius while maintaining responsive control
+    const sizeFactor = Math.max(0.58, 1.0 / (1.0 + (snake.radius - BASE_RADIUS) * 0.018));
     return baseTurn * sizeFactor;
   }
 
@@ -503,8 +523,10 @@ export class GameEngine {
       colorIndex,
       value: finalValue,
       radiance: radiance || (0.7 + Math.random() * 0.7),
-      pulseSpeed: 0.02 + Math.random() * 0.045,
+      pulseSpeed: 0.03 + Math.random() * 0.05,
       pulsePhase: Math.random() * Math.PI * 2,
+      wanderAngle: Math.random() * Math.PI * 2,
+      baseSpeed: 0.22 + Math.random() * 0.45,
       arrayIndex: this.orbs.length,
     };
     orb.gridKey = this.foodGrid.insert(orb as Orb & GridItem);
@@ -1087,6 +1109,10 @@ export class GameEngine {
     while (snake.angle < -Math.PI) snake.angle += Math.PI * 2;
     while (snake.angle > Math.PI) snake.angle -= Math.PI * 2;
 
+    // Track active turning / twirling intensity at head
+    const steerSharpness = Math.min(1.0, Math.abs(diff) / 0.7);
+    snake.twirlFactor = (snake.twirlFactor || 0) * 0.88 + steerSharpness * 0.12;
+
     // 2. Speed and Boost Logic
     const targetSpeed = snake.isBoosting ? snake.boostSpeed : snake.baseSpeed;
     snake.speed += (targetSpeed - snake.speed) * Math.min(1, 0.2 * dtScale);
@@ -1246,10 +1272,43 @@ export class GameEngine {
 
       snake.body[i].x = trailX[idx0] * (1 - frac) + trailX[idx1] * frac;
       snake.body[i].y = trailY[idx0] * (1 - frac) + trailY[idx1] * frac;
+    }
 
-      // Taper radius smoothly toward sleek tail tip
+    // 5b. Slither.io Twirl Dynamics:
+    // When turning or twirling into tight coils, the body compresses and reduces in size
+    // as you distance from the turn, giving that agile, tightly-wound serpentine coil.
+    for (let i = 1; i < bodyLen; i++) {
       const taper = Math.max(0.40, 1 - (i / bodyLen) * 0.60);
-      snake.body[i].radius = snake.radius * taper;
+
+      // Local body curvature / bend angle
+      const k = Math.min(3, Math.max(1, Math.floor(bodyLen / 10)));
+      const idxA = Math.max(0, i - k);
+      const idxB = Math.min(bodyLen - 1, i + k);
+      const segA = snake.body[idxA];
+      const segB = snake.body[i];
+      const segC = snake.body[idxB];
+      const v1x = segB.x - segA.x;
+      const v1y = segB.y - segA.y;
+      const v2x = segC.x - segB.x;
+      const v2y = segC.y - segB.y;
+      const l1 = Math.sqrt(v1x * v1x + v1y * v1y);
+      const l2 = Math.sqrt(v2x * v2x + v2y * v2y);
+      let localCurvature = 0;
+      if (l1 > 0.1 && l2 > 0.1) {
+        const dot = (v1x * v2x + v1y * v2y) / (l1 * l2);
+        // dot = 1 is straight line, lower means sharp bend
+        localCurvature = Math.max(0, Math.min(1.0, (1.0 - dot) * 3.5));
+      }
+
+      // Distance from the turn: Head (i=0) never shrinks; reduction smoothly increases as you distance from the turn
+      const distFromTurn = Math.min(1.0, i / 8);
+
+      // Twirling reduces body size by up to 24% as you distance from the turn
+      const turnAmount = Math.max(localCurvature, snake.twirlFactor || 0);
+      const twirlReduction = distFromTurn * turnAmount * 0.24;
+      const twirlScale = 1.0 - twirlReduction;
+
+      snake.body[i].radius = snake.radius * taper * twirlScale;
     }
 
     // 6. Food Eating & Pickup Magnetism
@@ -1665,6 +1724,26 @@ export class GameEngine {
         }
 
         orb.gridKey = this.foodGrid.insert(orb as Orb & GridItem);
+      } else {
+        // Slither.io organic ambient food drift and meandering motion
+        if (orb.wanderAngle === undefined) {
+          orb.wanderAngle = Math.random() * Math.PI * 2;
+        }
+        if (orb.baseSpeed === undefined) {
+          orb.baseSpeed = 0.22 + Math.random() * 0.45;
+        }
+        orb.wanderAngle += Math.sin(this.gameTime * 0.025 + orb.id) * 0.04 + (Math.random() - 0.5) * 0.02;
+        orb.x += Math.cos(orb.wanderAngle) * orb.baseSpeed;
+        orb.y += Math.sin(orb.wanderAngle) * orb.baseSpeed;
+
+        // Check if moved across spatial grid cell boundary
+        const newCx = Math.floor(orb.x / 180);
+        const newCy = Math.floor(orb.y / 180);
+        const newKey = this.foodGrid.getKey(newCx, newCy);
+        if (newKey !== orb.gridKey) {
+          this.foodGrid.remove(orb as Orb & GridItem, orb.gridKey);
+          orb.gridKey = this.foodGrid.insert(orb as Orb & GridItem);
+        }
       }
 
       // Hard clamp so no orb can ever be outside the red circle
@@ -1673,6 +1752,9 @@ export class GameEngine {
         const dist = Math.sqrt(distSq);
         orb.x = (orb.x / dist) * maxOrbDist;
         orb.y = (orb.y / dist) * maxOrbDist;
+        if (!orb.isPrey) {
+          orb.wanderAngle = Math.atan2(-orb.y, -orb.x);
+        }
       }
     }
   }
@@ -1868,8 +1950,12 @@ export class GameEngine {
 
     for (let i = 0; i < count; i++) {
       const orb = this.visibleOrbsList[i] as unknown as Orb;
-      const pulse = 1 + Math.sin(orb.pulsePhase) * 0.12;
+      // Slither.io organic dual-harmonic pulsating breathing
+      const pulse = 1 + Math.sin(orb.pulsePhase) * 0.18 + Math.sin(orb.pulsePhase * 2.3) * 0.06;
       const r = orb.radius * pulse;
+      const alpha = Math.max(0.70, Math.min(1.0, 0.88 + Math.sin(orb.pulsePhase) * 0.14));
+
+      ctx.globalAlpha = alpha;
 
       if (hasSprites) {
         if (orb.isPrey && this.preySprite) {
@@ -1893,6 +1979,7 @@ export class GameEngine {
         ctx.fill();
       }
     }
+    ctx.globalAlpha = 1.0;
   }
 
   private drawParticles(ctx: CanvasRenderingContext2D): void {
@@ -2012,8 +2099,31 @@ export class GameEngine {
     const camDy = head.y - this.camera.y;
     const isNearCamera = snake.isPlayer || snake.isRemoteHuman || (camDx * camDx + camDy * camDy < 490000);
 
-    // 2. Base Smooth Continuous Body Stroke (ultra-smooth liquid spine with LOD step)
     const spineStep = isZoomedOut && !isNearCamera ? 2 : 1;
+
+    // 2. Ambient Ground Drop Shadow (elevates snake body off the arena grid)
+    const shadowOffsetY = Math.min(6, snake.radius * 0.22);
+    ctx.beginPath();
+    ctx.moveTo(snake.body[bodyLen - 1].x, snake.body[bodyLen - 1].y + shadowOffsetY);
+    for (let i = bodyLen - 2; i >= 0; i -= spineStep) {
+      ctx.lineTo(snake.body[i].x, snake.body[i].y + shadowOffsetY);
+    }
+    if (spineStep > 1 && (bodyLen - 2) % spineStep !== 0) {
+      ctx.lineTo(snake.body[0].x, snake.body[0].y + shadowOffsetY);
+    }
+    ctx.lineWidth = Math.max(8, snake.radius * 2.05);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.42)';
+    ctx.stroke();
+
+    // Head ground shadow disc
+    ctx.beginPath();
+    ctx.arc(head.x, head.y + shadowOffsetY, snake.radius * 1.25, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.42)';
+    ctx.fill();
+
+    // 3. Base Smooth Continuous Body Spine (ensures zero gaps on sharp bends)
     ctx.beginPath();
     ctx.moveTo(snake.body[bodyLen - 1].x, snake.body[bodyLen - 1].y);
     for (let i = bodyLen - 2; i >= 0; i -= spineStep) {
@@ -2022,18 +2132,18 @@ export class GameEngine {
     if (spineStep > 1 && (bodyLen - 2) % spineStep !== 0) {
       ctx.lineTo(snake.body[0].x, snake.body[0].y);
     }
-    // Sleek continuous body stroke (never balloons at tail tip)
-    ctx.lineWidth = Math.max(7, snake.radius * 1.35);
+    ctx.lineWidth = Math.max(5, snake.radius * 1.05);
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.strokeStyle = skin.colors[0];
     ctx.stroke();
 
-    // 3. Draw Decorative Segment Discs (LOD: when zoomed out, skip for distant snakes to save 2,500 draw calls)
+    // 4. Draw Overlapping 3D Segment Discs with Rich Shading & Creases
     if (!isZoomedOut || isNearCamera) {
-      const drawStep = Math.max(1, Math.floor(snake.radius * (isZoomedOut ? 0.6 : 0.28)));
+      const drawStep = isZoomedOut && !isNearCamera ? 2 : 1;
       for (let i = bodyLen - 1; i >= 1; i -= drawStep) {
         const seg = snake.body[i];
+        const r = seg.radius;
 
         let segColor = skin.colors[0];
         if (skin.pattern === 'stripes') {
@@ -2048,28 +2158,70 @@ export class GameEngine {
           segColor = skin.colors[p];
         }
 
+        // Layer A: Segment base color
         ctx.beginPath();
-        ctx.arc(seg.x, seg.y, seg.radius, 0, Math.PI * 2);
+        ctx.arc(seg.x, seg.y, r, 0, Math.PI * 2);
         ctx.fillStyle = segColor;
         ctx.fill();
 
-        if (!isZoomedOut) {
-          // Specular 3D highlight
+        // Layer B: Dark crease rim stroke (creates distinct ringed scales/beads)
+        ctx.lineWidth = Math.max(1.5, r * 0.14);
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)';
+        ctx.stroke();
+
+        if (!isZoomedOut || isNearCamera) {
+          // Layer C: Underside deep shadow crescent (ambient occlusion + directional shade)
           ctx.beginPath();
-          ctx.arc(seg.x - seg.radius * 0.15, seg.y - seg.radius * 0.15, seg.radius * 0.55, 0, Math.PI * 2);
-          ctx.fillStyle = 'rgba(255, 255, 255, 0.22)';
+          ctx.arc(seg.x + r * 0.16, seg.y + r * 0.18, r * 0.82, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.34)';
+          ctx.fill();
+
+          // Layer D: Soft 3D diffuse highlight dome on top-left
+          ctx.beginPath();
+          ctx.arc(seg.x - r * 0.20, seg.y - r * 0.20, r * 0.60, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.28)';
+          ctx.fill();
+
+          // Layer E: Bright glossy specular reflection glint
+          ctx.beginPath();
+          ctx.arc(seg.x - r * 0.28, seg.y - r * 0.28, r * 0.22, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.65)';
           ctx.fill();
         }
       }
     }
 
-    // 4. Draw Snake Head
+    // 5. Draw Snake Head with Rich 3D Shading
+    const hr = snake.radius * 1.15;
     ctx.beginPath();
-    ctx.arc(head.x, head.y, snake.radius * 1.15, 0, Math.PI * 2);
+    ctx.arc(head.x, head.y, hr, 0, Math.PI * 2);
     ctx.fillStyle = skin.headColor;
     ctx.fill();
 
-    // 5. Draw Eyes (LOD: keep for nearby/player/leader, plus any snake large
+    // Dark rim stroke on head
+    ctx.lineWidth = Math.max(2, hr * 0.14);
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.50)';
+    ctx.stroke();
+
+    // Head underside deep shade
+    ctx.beginPath();
+    ctx.arc(head.x + hr * 0.16, head.y + hr * 0.18, hr * 0.82, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.32)';
+    ctx.fill();
+
+    // Head top-left 3D dome highlight
+    ctx.beginPath();
+    ctx.arc(head.x - hr * 0.20, head.y - hr * 0.20, hr * 0.60, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.26)';
+    ctx.fill();
+
+    // Head specular glint
+    ctx.beginPath();
+    ctx.arc(head.x - hr * 0.28, head.y - hr * 0.28, hr * 0.22, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.60)';
+    ctx.fill();
+
+    // 6. Draw Eyes (LOD: keep for nearby/player/leader, plus any snake large
     // enough on screen to read — skips sub-pixel eyes on tiny distant bots)
     const isTopLeaderEarly = this.leaderboard.length > 0 && this.leaderboard[0].id === snake.id;
     const screenHeadRadius = snake.radius * this.camera.zoom;
@@ -2106,7 +2258,7 @@ export class GameEngine {
       ctx.fill();
     }
 
-    // 6. Draw Crown if #1 on Leaderboard
+    // 7. Draw Crown if #1 on Leaderboard
     const isTopLeader = isTopLeaderEarly;
     if (isTopLeader) {
       ctx.save();
@@ -2126,7 +2278,7 @@ export class GameEngine {
       ctx.restore();
     }
 
-    // 7. Draw Name Tag and Score (LOD: skip for distant bots when zoomed out to avoid heavy font overhead)
+    // 8. Draw Name Tag and Score (LOD: skip for distant bots when zoomed out to avoid heavy font overhead)
     if (!isZoomedOut || isNearCamera || isTopLeader) {
       ctx.font = `600 ${Math.max(12, snake.radius * 0.8)}px sans-serif`;
       ctx.textAlign = 'center';
@@ -2142,7 +2294,7 @@ export class GameEngine {
       }
     }
 
-    // 8. Draw Spawn Protection Shield
+    // 9. Draw Spawn Protection Shield
     if (snake.invulnerableTimer > 0) {
       const shieldPulse = 0.5 + Math.sin(this.gameTime * 0.25) * 0.35;
       ctx.beginPath();
